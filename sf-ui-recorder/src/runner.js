@@ -301,13 +301,15 @@ async function main() {
   const { instanceUrl, accessToken } = getOrgInfo(orgAlias);
   const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, retURL);
 
+  const viewport = { width: 1600, height: 900 };
   const browser = await puppeteer.launch({
     headless: headless ? 'new' : false,
-    defaultViewport: null,
-    args: ['--disable-infobars']
+    defaultViewport: viewport,
+    args: ['--disable-infobars', `--window-size=${viewport.width},${viewport.height}`]
   });
 
   const page = await browser.newPage();
+  await page.setViewport(viewport);
   page.setDefaultTimeout(15000);
 
   console.log(`Opening ${frontdoorUrl}`);

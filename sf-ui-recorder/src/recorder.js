@@ -46,13 +46,15 @@ async function main() {
     });
   };
 
+  const viewport = { width: 1600, height: 900 };
   const browser = await puppeteer.launch({
     headless: false,
-    defaultViewport: null,
-    args: ['--disable-infobars']
+    defaultViewport: viewport,
+    args: ['--disable-infobars', `--window-size=${viewport.width},${viewport.height}`]
   });
 
   const [page] = await browser.pages();
+  await page.setViewport(viewport);
   page.setDefaultTimeout(15000);
 
   await page.exposeFunction('sfRecordEvent', step => {

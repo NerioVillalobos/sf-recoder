@@ -35,3 +35,4 @@ The runner executes headlessly by default. Pass `--headful` if you want to obser
 - Ensure you have already authenticated the target alias with `sf login web` outside of this tool.
 - Step files are stored under `steps/`; this directory is ignored by Git except for the provided example.
 - Additional documentation and schema details live in `sf-ui-recorder/README.md`.
+- The recorder and runner launch browsers at 1600×900 so Lightning stays in its desktop layout.

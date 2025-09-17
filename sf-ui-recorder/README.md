@@ -34,3 +34,4 @@ This launches headless (using Puppeteer's modern `headless: "new"` mode) by defa
 
 - The recorder attempts to use labels, text, and `data-testid` attributes for stable selectors before falling back to CSS paths.
 - Ensure Lightning pages finish loading before interacting so that selectors remain consistent.
+- Browsers open at 1600×900 (headless or headful) to keep Lightning menus visible and avoid responsive layout shifts.
