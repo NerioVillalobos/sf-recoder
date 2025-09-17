@@ -79,7 +79,52 @@ async function main() {
         };
       }
 
-      const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+    const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+    const TEXT_SUFFIX_PATTERNS = [
+      /Opens in a new tab/i,
+      /Opens in new tab/i,
+      /Opens in a new window/i,
+      /Opens in new window/i,
+      /Press Enter to open/i,
+      /Press Space to open/i,
+      /Press enter to activate/i,
+      /Press space to activate/i
+    ];
+
+    function sanitizeText(text) {
+      const normalized = normalize(text);
+      if (!normalized) {
+        return '';
+      }
+
+      for (const pattern of TEXT_SUFFIX_PATTERNS) {
+        const matchIndex = normalized.search(pattern);
+        if (matchIndex > 0) {
+          const shortened = normalize(normalized.slice(0, matchIndex));
+          if (shortened) {
+            return shortened;
+          }
+        }
+      }
+
+      const hyphenIndex = normalized.indexOf(' - ');
+      if (hyphenIndex > 0) {
+        const beforeHyphen = normalize(normalized.slice(0, hyphenIndex));
+        if (beforeHyphen) {
+          return beforeHyphen;
+        }
+      }
+
+      const colonIndex = normalized.indexOf(':');
+      if (colonIndex > 0) {
+        const beforeColon = normalize(normalized.slice(0, colonIndex));
+        if (beforeColon) {
+          return beforeColon;
+        }
+      }
+
+      return normalized.length > 140 ? normalized.slice(0, 140).trim() : normalized;
+    }
 
       function findLabelFor(el) {
         if (!el) return null;
@@ -155,11 +200,14 @@ async function main() {
 
         const aria = element.getAttribute('aria-label');
         if (aria) {
-          return { type: 'label', value: normalize(aria) };
+          const cleaned = sanitizeText(aria);
+          if (cleaned) {
+            return { type: 'label', value: cleaned };
+          }
         }
 
-        const textContent = normalize(element.innerText || element.textContent);
-        if (textContent && textContent.length <= 120) {
+        const textContent = sanitizeText(element.innerText || element.textContent);
+        if (textContent) {
           return { type: 'text', value: textContent };
         }
 

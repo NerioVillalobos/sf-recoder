@@ -63,6 +63,57 @@ async function queryXPath(page, expression) {
   return null;
 }
 
+function normalizeText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+const TEXT_SUFFIX_PATTERNS = [
+  /Opens in a new tab/i,
+  /Opens in new tab/i,
+  /Opens in a new window/i,
+  /Opens in new window/i,
+  /Press Enter to open/i,
+  /Press Space to open/i,
+  /Press space to activate/i,
+  /Press enter to activate/i
+];
+
+function buildTextVariants(value) {
+  const variants = new Set();
+  const normalized = normalizeText(value);
+  if (normalized) {
+    variants.add(normalized);
+
+    for (const pattern of TEXT_SUFFIX_PATTERNS) {
+      const matchIndex = normalized.search(pattern);
+      if (matchIndex > 0) {
+        const shortened = normalizeText(normalized.slice(0, matchIndex));
+        if (shortened) {
+          variants.add(shortened);
+        }
+      }
+    }
+
+    const hyphenIndex = normalized.indexOf(' - ');
+    if (hyphenIndex > 0) {
+      const beforeHyphen = normalizeText(normalized.slice(0, hyphenIndex));
+      if (beforeHyphen) {
+        variants.add(beforeHyphen);
+      }
+    }
+
+    const colonIndex = normalized.indexOf(':');
+    if (colonIndex > 0) {
+      const beforeColon = normalizeText(normalized.slice(0, colonIndex));
+      if (beforeColon) {
+        variants.add(beforeColon);
+      }
+    }
+  }
+
+  return Array.from(variants);
+}
+
 async function byDataTestId(page, value, timeout) {
   return waitForHandle(page, async () => {
     const selector = `[data-testid="${cssEscape(value)}"]`;
@@ -109,22 +160,45 @@ async function byLabel(page, value, timeout) {
 }
 
 async function byText(page, value, timeout) {
-  const literal = xpathLiteral(value.trim());
-  const queries = [
-    `//button[normalize-space()=${literal}]`,
-    `//a[normalize-space()=${literal}]`,
-    `//span[normalize-space()=${literal}]`,
-    `//div[normalize-space()=${literal}]`,
-    `//lightning-formatted-text[normalize-space()=${literal}]`
-  ];
+  const variants = buildTextVariants(value);
 
   return waitForHandle(page, async () => {
-    for (const query of queries) {
-      const handle = await queryXPath(page, query);
-      if (handle) {
-        return handle;
+    for (const variant of variants) {
+      const literal = xpathLiteral(variant);
+      const exactQueries = [
+        `//button[normalize-space()=${literal}]`,
+        `//a[normalize-space()=${literal}]`,
+        `//span[normalize-space()=${literal}]`,
+        `//div[normalize-space()=${literal}]`,
+        `//lightning-formatted-text[normalize-space()=${literal}]`
+      ];
+
+      for (const query of exactQueries) {
+        const handle = await queryXPath(page, query);
+        if (handle) {
+          return handle;
+        }
       }
     }
+
+    for (const variant of variants) {
+      const literal = xpathLiteral(variant);
+      const containsQueries = [
+        `//button[contains(normalize-space(), ${literal})]`,
+        `//a[contains(normalize-space(), ${literal})]`,
+        `//span[contains(normalize-space(), ${literal})]`,
+        `//div[contains(normalize-space(), ${literal})]`,
+        `//lightning-formatted-text[contains(normalize-space(), ${literal})]`
+      ];
+
+      for (const query of containsQueries) {
+        const handle = await queryXPath(page, query);
+        if (handle) {
+          return handle;
+        }
+      }
+    }
+
     return null;
   }, timeout);
 }
