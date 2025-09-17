@@ -127,6 +127,69 @@ async function queryShadowByText(page, value, exact) {
   );
 }
 
+async function queryShadowByAttributes(page, value, attributes, exact) {
+  return page.evaluateHandle(
+    (search, attrs, exactMatch) => {
+      const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+      const lower = text => normalize(text).toLowerCase();
+
+      const needle = lower(search);
+
+      const queue = [];
+      if (document.documentElement) {
+        queue.push(document.documentElement);
+      }
+
+      while (queue.length) {
+        const node = queue.shift();
+        if (!(node instanceof Element)) {
+          continue;
+        }
+
+        for (const attribute of attrs) {
+          let candidate = '';
+          if (attribute in node && typeof node[attribute] === 'string') {
+            candidate = node[attribute];
+          }
+          if (!candidate) {
+            candidate = node.getAttribute(attribute);
+          }
+
+          if (!candidate) {
+            continue;
+          }
+
+          const normalized = normalize(candidate);
+          const comparison = normalized.toLowerCase();
+
+          if (
+            (exactMatch && comparison === needle) ||
+            (!exactMatch && comparison.includes(needle))
+          ) {
+            return node;
+          }
+        }
+
+        if (node.shadowRoot) {
+          queue.push(...node.shadowRoot.children);
+          const slots = Array.from(node.shadowRoot.querySelectorAll('slot'));
+          for (const slot of slots) {
+            const assigned = slot.assignedElements ? slot.assignedElements() : [];
+            queue.push(...assigned);
+          }
+        }
+
+        queue.push(...node.children);
+      }
+
+      return null;
+    },
+    value,
+    attributes,
+    exact
+  );
+}
+
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
@@ -325,6 +388,18 @@ async function byText(page, value, timeout) {
     }
 
     for (const variant of variants) {
+      const attrExactHandle = await queryShadowByAttributes(
+        page,
+        variant,
+        ['placeholder', 'aria-label'],
+        true
+      );
+      const attrExactElement = attrExactHandle.asElement();
+      if (attrExactElement) {
+        return attrExactElement;
+      }
+      await attrExactHandle.dispose();
+
       const exactHandle = await queryShadowByText(page, variant, true);
       const exactElement = exactHandle.asElement();
       if (exactElement) {
@@ -334,6 +409,18 @@ async function byText(page, value, timeout) {
     }
 
     for (const variant of variants) {
+      const attrContainsHandle = await queryShadowByAttributes(
+        page,
+        variant,
+        ['placeholder', 'aria-label'],
+        false
+      );
+      const attrContainsElement = attrContainsHandle.asElement();
+      if (attrContainsElement) {
+        return attrContainsElement;
+      }
+      await attrContainsHandle.dispose();
+
       const containsHandle = await queryShadowByText(page, variant, false);
       const containsElement = containsHandle.asElement();
       if (containsElement) {
