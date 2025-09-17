@@ -1,6 +1,17 @@
 const DEFAULT_TIMEOUT = 10000;
 const POLL_INTERVAL = 250;
 
+async function sleep(page, ms) {
+  if (ms <= 0) {
+    return;
+  }
+  if (page && typeof page.waitForTimeout === 'function') {
+    await page.waitForTimeout(ms);
+  } else {
+    await new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+
 function cssEscape(value) {
   return String(value).replace(/([\\\"'\[\]#.:>+~*=^$|])/g, '\\$1');
 }
@@ -20,8 +31,35 @@ async function waitForHandle(page, getter, timeout = DEFAULT_TIMEOUT) {
     if (handle) {
       return handle;
     }
-    await page.waitForTimeout(POLL_INTERVAL);
+    await sleep(page, POLL_INTERVAL);
   }
+  return null;
+}
+
+async function queryXPath(page, expression) {
+  if (typeof page.$x === 'function') {
+    const handles = await page.$x(expression);
+    if (handles.length > 0) {
+      return handles[0];
+    }
+  }
+
+  const handle = await page.evaluateHandle(xpath => {
+    const result = document.evaluate(
+      xpath,
+      document,
+      null,
+      XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null
+    );
+    return result.singleNodeValue || null;
+  }, expression);
+
+  const element = handle.asElement();
+  if (element) {
+    return element;
+  }
+  await handle.dispose();
   return null;
 }
 
@@ -82,9 +120,9 @@ async function byText(page, value, timeout) {
 
   return waitForHandle(page, async () => {
     for (const query of queries) {
-      const handles = await page.$x(query);
-      if (handles.length > 0) {
-        return handles[0];
+      const handle = await queryXPath(page, query);
+      if (handle) {
+        return handle;
       }
     }
     return null;
@@ -96,10 +134,7 @@ async function byCss(page, value, timeout) {
 }
 
 async function byXpath(page, value, timeout) {
-  return waitForHandle(page, async () => {
-    const handles = await page.$x(value);
-    return handles[0] || null;
-  }, timeout);
+  return waitForHandle(page, async () => queryXPath(page, value), timeout);
 }
 
 async function byRole(page, value, timeout) {
