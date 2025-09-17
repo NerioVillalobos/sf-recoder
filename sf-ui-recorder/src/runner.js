@@ -148,9 +148,9 @@ async function main() {
   const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, retURL);
 
   const browser = await puppeteer.launch({
-    headless,
+    headless: headless ? 'new' : false,
     defaultViewport: null,
-    args: headless ? ['--disable-infobars'] : ['--disable-infobars']
+    args: ['--disable-infobars']
   });
 
   const page = await browser.newPage();

@@ -28,7 +28,7 @@ This opens the specified org in a non-headless browser and captures clicks and f
 node src/runner.js --org <alias> --steps steps/mi-flujo.json
 ```
 
-This launches headless by default and runs the recorded steps against the chosen org.
+This launches headless (using Puppeteer's modern `headless: "new"` mode) by default and runs the recorded steps against the chosen org. Pass `--headful` to watch the playback.
 
 ## Notes
 

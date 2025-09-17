@@ -135,11 +135,20 @@ function buildTextVariants(value) {
     }
 
     if (normalized.length > 80) {
-      const words = normalized.split(' ');
-      const firstWords = words.slice(0, 8).join(' ');
-      if (firstWords) {
-        variants.add(normalizeText(firstWords));
+      const words = normalized.split(' ').filter(Boolean);
+      const wordWindows = [8, 5, 3, 2];
+      for (const count of wordWindows) {
+        if (words.length >= count) {
+          const chunk = normalizeText(words.slice(0, count).join(' '));
+          if (chunk) {
+            variants.add(chunk);
+          }
+        }
       }
+    }
+
+    if (/\bApp Launcher\b/i.test(normalized)) {
+      variants.add('App Launcher');
     }
   }
 
