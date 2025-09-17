@@ -211,7 +211,9 @@ async function byText(page, value, timeout) {
         `//a[normalize-space()=${literal}]`,
         `//span[normalize-space()=${literal}]`,
         `//div[normalize-space()=${literal}]`,
-        `//lightning-formatted-text[normalize-space()=${literal}]`
+        `//lightning-formatted-text[normalize-space()=${literal}]`,
+        `//*[@placeholder and normalize-space(@placeholder)=${literal}]`,
+        `//*[@aria-label and normalize-space(@aria-label)=${literal}]`
       ];
 
       for (const query of exactQueries) {
@@ -229,7 +231,9 @@ async function byText(page, value, timeout) {
         `//a[contains(normalize-space(), ${literal})]`,
         `//span[contains(normalize-space(), ${literal})]`,
         `//div[contains(normalize-space(), ${literal})]`,
-        `//lightning-formatted-text[contains(normalize-space(), ${literal})]`
+        `//lightning-formatted-text[contains(normalize-space(), ${literal})]`,
+        `//*[@placeholder and contains(normalize-space(@placeholder), ${literal})]`,
+        `//*[@aria-label and contains(normalize-space(@aria-label), ${literal})]`
       ];
 
       for (const query of containsQueries) {
