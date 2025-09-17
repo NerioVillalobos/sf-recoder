@@ -4,11 +4,11 @@ Minimal Salesforce Lightning recorder/replayer that uses existing Salesforce CLI
 
 ## Getting started
 
-1. Install dependencies (Puppeteer is configured via the nested project):
+1. Install dependencies (workspace aware):
    ```bash
-   cd sf-ui-recorder
    PUPPETEER_SKIP_DOWNLOAD=1 npm install
    ```
+   This installs the nested `sf-ui-recorder` package. If you prefer, run the same command inside `sf-ui-recorder/` instead of using workspaces.
 2. Return to the repo root to run the tools.
 
 ## Recording a flow
@@ -19,7 +19,8 @@ From the repository root:
 node src/recorder.js --org <alias> --out steps/mi-flujo.json --ret /lightning/o/Case/list?filterName=Recent
 ```
 
-This command proxies to the recorder inside `sf-ui-recorder/src/recorder.js`, launches a non-headless browser, and writes steps to the given JSON file (relative paths resolve from the repo root).
+This command proxies to the recorder inside `sf-ui-recorder/src/recorder.js`, launches a non-headless browser, and writes steps
+to the given JSON file (relative paths resolve from the repo root).
 
 ## Replaying a flow
 

@@ -1,0 +1,8 @@
+{
+  "name": "sf-recoder",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "sf-ui-recorder"
+  ]
+}
