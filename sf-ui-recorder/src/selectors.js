@@ -94,6 +94,22 @@ function buildTextVariants(value) {
       }
     }
 
+    const clearIndex = normalized.search(/\bClear All results for\b/i);
+    if (clearIndex > 0) {
+      const beforeClear = normalizeText(normalized.slice(0, clearIndex));
+      if (beforeClear) {
+        variants.add(beforeClear);
+      }
+    }
+
+    const appsIndex = normalized.indexOf(' Apps ');
+    if (appsIndex > 0) {
+      const beforeApps = normalizeText(normalized.slice(0, appsIndex));
+      if (beforeApps) {
+        variants.add(beforeApps);
+      }
+    }
+
     const hyphenIndex = normalized.indexOf(' - ');
     if (hyphenIndex > 0) {
       const beforeHyphen = normalizeText(normalized.slice(0, hyphenIndex));
@@ -107,6 +123,22 @@ function buildTextVariants(value) {
       const beforeColon = normalizeText(normalized.slice(0, colonIndex));
       if (beforeColon) {
         variants.add(beforeColon);
+      }
+    }
+
+    const sentenceMatch = normalized.match(/[^.!?]+[.!?…]/);
+    if (sentenceMatch) {
+      const firstSentence = normalizeText(sentenceMatch[0]);
+      if (firstSentence) {
+        variants.add(firstSentence);
+      }
+    }
+
+    if (normalized.length > 80) {
+      const words = normalized.split(' ');
+      const firstWords = words.slice(0, 8).join(' ');
+      if (firstWords) {
+        variants.add(normalizeText(firstWords));
       }
     }
   }
