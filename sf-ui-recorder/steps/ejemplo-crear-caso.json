@@ -1,0 +1,12 @@
+[
+  {
+    "action": "click",
+    "selector": {
+      "type": "text",
+      "value": "New"
+    },
+    "waitFor": {
+      "type": "short"
+    }
+  }
+]
