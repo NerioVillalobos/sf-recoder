@@ -27,9 +27,20 @@ function xpathLiteral(value) {
 async function waitForHandle(page, getter, timeout = DEFAULT_TIMEOUT) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
-    const handle = await getter();
-    if (handle) {
-      return handle;
+    try {
+      const handle = await getter();
+      if (handle) {
+        return handle;
+      }
+    } catch (err) {
+      const message = err && err.message ? err.message : '';
+      const transient =
+        message.includes('Execution context was destroyed') ||
+        message.includes('Cannot find context with specified id') ||
+        message.includes('Most likely because of a navigation');
+      if (!transient) {
+        throw err;
+      }
     }
     await sleep(page, POLL_INTERVAL);
   }
@@ -63,10 +74,16 @@ async function queryXPath(page, expression) {
   return null;
 }
 
+const XPATH_UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZÁÉÍÓÚÄËÏÖÜÑÇ';
+const XPATH_LOWER = 'abcdefghijklmnopqrstuvwxyzáéíóúäëïöüñç';
+
 async function queryShadowByText(page, value, exact) {
   return page.evaluateHandle(
     (search, exactMatch) => {
       const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+      const lower = text => normalize(text).toLowerCase();
+
+      const needle = lower(search);
 
       const queue = [];
       if (document.documentElement) {
@@ -79,9 +96,14 @@ async function queryShadowByText(page, value, exact) {
           continue;
         }
 
-        const text = normalize(node.innerText || node.textContent);
+        const text = node.innerText || node.textContent;
         if (text) {
-          if (exactMatch ? text === search : text.includes(search)) {
+          const normalized = normalize(text);
+          const candidate = normalized.toLowerCase();
+          if (
+            (exactMatch && candidate === needle) ||
+            (!exactMatch && candidate.includes(needle))
+          ) {
             return node;
           }
         }
@@ -248,6 +270,7 @@ async function byText(page, value, timeout) {
   return waitForHandle(page, async () => {
     for (const variant of variants) {
       const literal = xpathLiteral(variant);
+      const lowerLiteral = xpathLiteral(variant.toLowerCase());
       const exactQueries = [
         `//button[normalize-space()=${literal}]`,
         `//a[normalize-space()=${literal}]`,
@@ -255,7 +278,14 @@ async function byText(page, value, timeout) {
         `//div[normalize-space()=${literal}]`,
         `//lightning-formatted-text[normalize-space()=${literal}]`,
         `//*[@placeholder and normalize-space(@placeholder)=${literal}]`,
-        `//*[@aria-label and normalize-space(@aria-label)=${literal}]`
+        `//*[@aria-label and normalize-space(@aria-label)=${literal}]`,
+        `//button[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
+        `//a[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
+        `//span[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
+        `//div[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
+        `//lightning-formatted-text[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
+        `//*[@placeholder and translate(normalize-space(@placeholder), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
+        `//*[@aria-label and translate(normalize-space(@aria-label), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`
       ];
 
       for (const query of exactQueries) {
@@ -268,6 +298,7 @@ async function byText(page, value, timeout) {
 
     for (const variant of variants) {
       const literal = xpathLiteral(variant);
+      const lowerLiteral = xpathLiteral(variant.toLowerCase());
       const containsQueries = [
         `//button[contains(normalize-space(), ${literal})]`,
         `//a[contains(normalize-space(), ${literal})]`,
@@ -275,7 +306,14 @@ async function byText(page, value, timeout) {
         `//div[contains(normalize-space(), ${literal})]`,
         `//lightning-formatted-text[contains(normalize-space(), ${literal})]`,
         `//*[@placeholder and contains(normalize-space(@placeholder), ${literal})]`,
-        `//*[@aria-label and contains(normalize-space(@aria-label), ${literal})]`
+        `//*[@aria-label and contains(normalize-space(@aria-label), ${literal})]`,
+        `//button[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
+        `//a[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
+        `//span[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
+        `//div[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
+        `//lightning-formatted-text[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
+        `//*[@placeholder and contains(translate(normalize-space(@placeholder), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
+        `//*[@aria-label and contains(translate(normalize-space(@aria-label), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`
       ];
 
       for (const query of containsQueries) {
