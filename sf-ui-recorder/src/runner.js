@@ -54,16 +54,95 @@ async function applyWait(page, waitFor) {
   await wait(page, duration);
 }
 
+async function ensureClickable(page, handle) {
+  const resultHandle = await handle.evaluateHandle(element => {
+    const ACTIONABLE_SELECTOR = [
+      'button',
+      'a',
+      'input',
+      'textarea',
+      'select',
+      '[role="button"]',
+      '[role="menuitem"]',
+      '[role="option"]',
+      '[role="tab"]',
+      '[role="link"]',
+      '[role="radio"]',
+      '[role="checkbox"]',
+      '[role="switch"]'
+    ].join(',');
+
+    const isElement = node => node instanceof Element;
+
+    const isActionable = node => {
+      if (!isElement(node)) {
+        return false;
+      }
+      return typeof node.matches === 'function' && node.matches(ACTIONABLE_SELECTOR);
+    };
+
+    const enqueueShadowChildren = (queue, node) => {
+      if (!node.shadowRoot) {
+        return;
+      }
+      queue.push(...node.shadowRoot.children);
+      const slots = Array.from(node.shadowRoot.querySelectorAll('slot'));
+      for (const slot of slots) {
+        if (typeof slot.assignedElements === 'function') {
+          queue.push(...slot.assignedElements());
+        }
+      }
+    };
+
+    const visited = new Set();
+    const queue = [];
+    if (isElement(element)) {
+      queue.push(element);
+    }
+
+    while (queue.length) {
+      const node = queue.shift();
+      if (!isElement(node) || visited.has(node)) {
+        continue;
+      }
+      visited.add(node);
+
+      if (isActionable(node)) {
+        return node;
+      }
+
+      enqueueShadowChildren(queue, node);
+      queue.push(...node.children);
+    }
+
+    return isElement(element) ? element : null;
+  });
+
+  const element = resultHandle.asElement();
+  if (!element) {
+    await resultHandle.dispose();
+    const fallback = handle.asElement();
+    if (fallback) {
+      return fallback;
+    }
+    throw new Error('Selector did not resolve to a DOM element.');
+  }
+
+  await handle.dispose();
+  return element;
+}
+
 async function performClick(page, step, timeoutOverride) {
   const handle = await resolveHandle(page, step.selector, {
     timeout: timeoutOverride
   });
-  await handle.evaluate(el => {
+  const target = await ensureClickable(page, handle);
+  await target.evaluate(el => {
     if (el.scrollIntoView) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     }
   });
-  await handle.click({ delay: 50 });
+  await target.click({ delay: 50 });
   await applyWait(page, step.waitFor);
 }
 

@@ -88,6 +88,11 @@ async function queryShadowByText(page, value, exact) {
 
         if (node.shadowRoot) {
           queue.push(...node.shadowRoot.children);
+          const slots = Array.from(node.shadowRoot.querySelectorAll('slot'));
+          for (const slot of slots) {
+            const assigned = slot.assignedElements ? slot.assignedElements() : [];
+            queue.push(...assigned);
+          }
         }
 
         queue.push(...node.children);
