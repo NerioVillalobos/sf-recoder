@@ -54,8 +54,10 @@ async function applyWait(page, waitFor) {
   await wait(page, duration);
 }
 
-async function performClick(page, step) {
-  const handle = await resolveHandle(page, step.selector);
+async function performClick(page, step, timeoutOverride) {
+  const handle = await resolveHandle(page, step.selector, {
+    timeout: timeoutOverride
+  });
   await handle.evaluate(el => {
     if (el.scrollIntoView) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
@@ -65,8 +67,10 @@ async function performClick(page, step) {
   await applyWait(page, step.waitFor);
 }
 
-async function performType(page, step) {
-  const handle = await resolveHandle(page, step.selector);
+async function performType(page, step, timeoutOverride) {
+  const handle = await resolveHandle(page, step.selector, {
+    timeout: timeoutOverride
+  });
   const value = step.value || '';
   const delay = typeof step.delay === 'number' ? step.delay : 30;
 
@@ -119,15 +123,21 @@ async function performWait(page, step) {
 
 async function main() {
   const argv = minimist(process.argv.slice(2), {
-    string: ['org', 'steps', 'ret'],
+    string: ['org', 'steps', 'ret', 'timeout'],
     boolean: ['headful'],
-    alias: { org: 'o', steps: 's', ret: 'r', headful: 'H' }
+    alias: { org: 'o', steps: 's', ret: 'r', headful: 'H', timeout: 't' }
   });
 
   const orgAlias = argv.org;
   const stepsPath = argv.steps;
   const retURL = argv.ret || DEFAULT_RET_URL;
   const headless = !argv.headful;
+  const selectorTimeout = argv.timeout !== undefined ? Number(argv.timeout) : undefined;
+
+  if (Number.isNaN(selectorTimeout)) {
+    console.error('Invalid --timeout value. Expected a number of milliseconds.');
+    process.exit(1);
+  }
 
   if (!orgAlias || !stepsPath) {
     console.error('Usage: node src/runner.js --org <alias> --steps <file> [--ret <retURL>] [--headful]');
@@ -165,10 +175,10 @@ async function main() {
     try {
       switch (step.action) {
         case 'click':
-          await performClick(page, step);
+          await performClick(page, step, selectorTimeout);
           break;
         case 'type':
-          await performType(page, step);
+          await performType(page, step, selectorTimeout);
           break;
         case 'wait':
           await performWait(page, step);

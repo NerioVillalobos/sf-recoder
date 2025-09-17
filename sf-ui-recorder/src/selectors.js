@@ -1,4 +1,4 @@
-const DEFAULT_TIMEOUT = 10000;
+const DEFAULT_TIMEOUT = 20000;
 const POLL_INTERVAL = 250;
 
 async function sleep(page, ms) {
@@ -269,7 +269,7 @@ async function resolveHandle(page, selector, options = {}) {
     throw new Error('Invalid selector provided.');
   }
 
-  const timeout = options.timeout || DEFAULT_TIMEOUT;
+  const timeout = options.timeout ?? DEFAULT_TIMEOUT;
   const value = selector.value;
   let handle = null;
 
