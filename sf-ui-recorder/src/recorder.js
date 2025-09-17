@@ -55,9 +55,6 @@ async function main() {
   const [page] = await browser.pages();
   page.setDefaultTimeout(15000);
 
-  console.log(`Opening ${frontdoorUrl}`);
-  await page.goto(frontdoorUrl, { waitUntil: 'networkidle2' });
-
   await page.exposeFunction('sfRecordEvent', step => {
     if (!step || !step.selector) {
       return;
@@ -65,158 +62,180 @@ async function main() {
     saveStep(step);
   });
 
-  await page.evaluate(() => {
-    if (window.__sfRecorderInjected) {
-      return;
-    }
-    window.__sfRecorderInjected = true;
+  await page.evaluateOnNewDocument(() => {
+    window.__sfRecorderReady = false;
 
-    window.CSS = window.CSS || {};
-    if (typeof window.CSS.escape !== 'function') {
-      window.CSS.escape = function (value) {
-        return String(value).replace(/([\\"'\[\]#.:>+~*=^$|])/g, '\\$1');
-      };
-    }
-
-    const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
-
-    function findLabelFor(el) {
-      if (!el) return null;
-      if (el.labels && el.labels.length > 0) {
-        return el.labels[0];
+    function attachRecorder() {
+      if (window.__sfRecorderInjected) {
+        window.__sfRecorderReady = true;
+        return;
       }
-      const id = el.getAttribute('id');
-      if (id) {
-        const direct = document.querySelector(`label[for="${CSS.escape(id)}"]`);
-        if (direct) {
-          return direct;
+      window.__sfRecorderInjected = true;
+
+      window.CSS = window.CSS || {};
+      if (typeof window.CSS.escape !== 'function') {
+        window.CSS.escape = function (value) {
+          return String(value).replace(/([\\"'\[\]#.:>+~*=^$|])/g, '\\$1');
+        };
+      }
+
+      const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+
+      function findLabelFor(el) {
+        if (!el) return null;
+        if (el.labels && el.labels.length > 0) {
+          return el.labels[0];
         }
-      }
-      let parent = el.parentElement;
-      while (parent) {
-        if (parent.tagName === 'LABEL') {
-          return parent;
-        }
-        parent = parent.parentElement;
-      }
-      return null;
-    }
-
-    function cssPath(el) {
-      if (!(el instanceof Element)) {
-        return null;
-      }
-      const parts = [];
-      let current = el;
-      while (current && current.nodeType === 1 && current !== document.body) {
-        let selector = current.tagName.toLowerCase();
-        if (current.id) {
-          selector = `${selector}#${current.id}`;
-          parts.unshift(selector);
-          break;
-        } else {
-          let siblingIndex = 1;
-          let sibling = current.previousElementSibling;
-          while (sibling) {
-            if (sibling.tagName === current.tagName) {
-              siblingIndex += 1;
-            }
-            sibling = sibling.previousElementSibling;
+        const id = el.getAttribute('id');
+        if (id) {
+          const direct = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+          if (direct) {
+            return direct;
           }
-          selector += `:nth-of-type(${siblingIndex})`;
         }
-        parts.unshift(selector);
-        current = current.parentElement;
-      }
-      return parts.join(' > ');
-    }
-
-    function buildSelector(target) {
-      if (!target || !(target instanceof Element)) {
+        let parent = el.parentElement;
+        while (parent) {
+          if (parent.tagName === 'LABEL') {
+            return parent;
+          }
+          parent = parent.parentElement;
+        }
         return null;
       }
 
-      const actionable = target.closest('[data-testid], button, a, input, textarea, select, [role="button"], [role="menuitem"], [role="tab"], lightning-button, lightning-base-combobox, lightning-input');
-      const element = actionable || target;
-
-      const dataTestId = element.getAttribute('data-testid') || element.dataset.testid;
-      if (dataTestId) {
-        return { type: 'dataTestId', value: normalize(dataTestId) };
-      }
-
-      const label = findLabelFor(element);
-      if (label) {
-        const text = normalize(label.textContent);
-        if (text) {
-          return { type: 'label', value: text };
+      function cssPath(el) {
+        if (!(el instanceof Element)) {
+          return null;
         }
+        const parts = [];
+        let current = el;
+        while (current && current.nodeType === 1 && current !== document.body) {
+          let selector = current.tagName.toLowerCase();
+          if (current.id) {
+            selector = `${selector}#${current.id}`;
+            parts.unshift(selector);
+            break;
+          } else {
+            let siblingIndex = 1;
+            let sibling = current.previousElementSibling;
+            while (sibling) {
+              if (sibling.tagName === current.tagName) {
+                siblingIndex += 1;
+              }
+              sibling = sibling.previousElementSibling;
+            }
+            selector += `:nth-of-type(${siblingIndex})`;
+          }
+          parts.unshift(selector);
+          current = current.parentElement;
+        }
+        return parts.join(' > ');
       }
 
-      const aria = element.getAttribute('aria-label');
-      if (aria) {
-        return { type: 'label', value: normalize(aria) };
+      function buildSelector(target) {
+        if (!target || !(target instanceof Element)) {
+          return null;
+        }
+
+        const actionable = target.closest('[data-testid], button, a, input, textarea, select, [role="button"], [role="menuitem"], [role="tab"], lightning-button, lightning-base-combobox, lightning-input');
+        const element = actionable || target;
+
+        const dataTestId = element.getAttribute('data-testid') || element.dataset.testid;
+        if (dataTestId) {
+          return { type: 'dataTestId', value: normalize(dataTestId) };
+        }
+
+        const label = findLabelFor(element);
+        if (label) {
+          const text = normalize(label.textContent);
+          if (text) {
+            return { type: 'label', value: text };
+          }
+        }
+
+        const aria = element.getAttribute('aria-label');
+        if (aria) {
+          return { type: 'label', value: normalize(aria) };
+        }
+
+        const textContent = normalize(element.innerText || element.textContent);
+        if (textContent && textContent.length <= 120) {
+          return { type: 'text', value: textContent };
+        }
+
+        if (element.id) {
+          return { type: 'css', value: `#${element.id}` };
+        }
+
+        const role = element.getAttribute('role');
+        if (role) {
+          return { type: 'role', value: role };
+        }
+
+        const path = cssPath(element);
+        if (path) {
+          return { type: 'css', value: path };
+        }
+
+        return null;
       }
 
-      const textContent = normalize(element.innerText || element.textContent);
-      if (textContent && textContent.length <= 120) {
-        return { type: 'text', value: textContent };
+      function recordClick(event) {
+        if (event.button !== 0) {
+          return;
+        }
+        const selector = buildSelector(event.target);
+        if (!selector) {
+          return;
+        }
+        window.sfRecordEvent({
+          action: 'click',
+          selector,
+          waitFor: { type: 'short' }
+        });
       }
 
-      if (element.id) {
-        return { type: 'css', value: `#${element.id}` };
+      function recordChange(event) {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
+          return;
+        }
+        const selector = buildSelector(target);
+        if (!selector) {
+          return;
+        }
+        const payload = {
+          action: 'type',
+          selector,
+          value: target.value,
+          delay: 10
+        };
+        window.sfRecordEvent(payload);
       }
 
-      const role = element.getAttribute('role');
-      if (role) {
-        return { type: 'role', value: role };
-      }
+      document.addEventListener('click', recordClick, true);
+      document.addEventListener('change', recordChange, true);
 
-      const path = cssPath(element);
-      if (path) {
-        return { type: 'css', value: path };
-      }
-
-      return null;
+      window.__sfRecorderReady = true;
+      console.log('[SF Recorder] Listeners attached.');
     }
 
-    function recordClick(event) {
-      if (event.button !== 0) {
-        return;
-      }
-      const selector = buildSelector(event.target);
-      if (!selector) {
-        return;
-      }
-      window.sfRecordEvent({
-        action: 'click',
-        selector,
-        waitFor: { type: 'short' }
-      });
+    if (document.readyState === 'loading') {
+      window.addEventListener('DOMContentLoaded', attachRecorder, { once: true });
+    } else {
+      attachRecorder();
     }
-
-    function recordChange(event) {
-      const target = event.target;
-      if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
-        return;
-      }
-      const selector = buildSelector(target);
-      if (!selector) {
-        return;
-      }
-      const payload = {
-        action: 'type',
-        selector,
-        value: target.value,
-        delay: 10
-      };
-      window.sfRecordEvent(payload);
-    }
-
-    document.addEventListener('click', recordClick, true);
-    document.addEventListener('change', recordChange, true);
-
-    console.log('[SF Recorder] Listeners attached.');
   });
+
+  console.log(`Opening ${frontdoorUrl}`);
+  await page.goto(frontdoorUrl, { waitUntil: 'networkidle2' });
+
+  try {
+    await page.waitForFunction(() => window.__sfRecorderReady === true, { timeout: 45000, polling: 250 });
+    console.log('Recorder listeners ready.');
+  } catch (err) {
+    console.warn('Recorder listeners did not confirm readiness before timeout. Interactions may not be captured immediately.');
+  }
 
   console.log(`Recording interactions. Output: ${outputPath}`);
   console.log('Press Ctrl+C to finish.');
