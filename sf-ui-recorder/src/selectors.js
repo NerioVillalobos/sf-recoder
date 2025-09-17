@@ -402,5 +402,115 @@ async function resolveHandle(page, selector, options = {}) {
 }
 
 module.exports = {
-  resolveHandle
+  resolveHandle,
+  buildTextVariants,
+  async debugTextMatches(page, value, limit = 10) {
+    const variants = buildTextVariants(value);
+    return page.evaluate(
+      ({ searches, maxResults }) => {
+        const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+        const results = [];
+        const seen = new Set();
+
+        const describeElement = (element, match) => {
+          if (!element) {
+            return null;
+          }
+
+          const toCssPath = node => {
+            const parts = [];
+            let current = node;
+            while (current && current.nodeType === 1 && current !== document.body) {
+              let selector = current.tagName.toLowerCase();
+              if (current.id) {
+                selector += `#${current.id}`;
+                parts.unshift(selector);
+                break;
+              }
+              if (current.classList && current.classList.length) {
+                selector += `.${Array.from(current.classList).join('.')}`;
+              }
+              const siblings = current.parentElement
+                ? Array.from(current.parentElement.children).filter(child => child.tagName === current.tagName)
+                : [];
+              if (siblings.length > 1) {
+                const index = siblings.indexOf(current);
+                selector += `:nth-of-type(${index + 1})`;
+              }
+              parts.unshift(selector);
+              current = current.parentElement;
+            }
+            return parts.join(' > ');
+          };
+
+          const text = normalize(element.innerText || element.textContent || '');
+          const ariaLabel = normalize(element.getAttribute('aria-label'));
+          const placeholder = normalize(element.getAttribute('placeholder'));
+          const dataTestId =
+            element.getAttribute('data-testid') || (element.dataset ? element.dataset.testid : null) || null;
+
+          return {
+            match,
+            tag: element.tagName.toLowerCase(),
+            text,
+            ariaLabel,
+            placeholder,
+            dataTestId,
+            role: element.getAttribute('role') || null,
+            cssPath: toCssPath(element)
+          };
+        };
+
+        const pushResult = (element, match) => {
+          if (!element || results.length >= maxResults) {
+            return;
+          }
+          if (seen.has(element)) {
+            return;
+          }
+          seen.add(element);
+          const description = describeElement(element, match);
+          if (description) {
+            results.push(description);
+          }
+        };
+
+        const elements = Array.from(document.querySelectorAll('*'));
+        for (const element of elements) {
+          if (results.length >= maxResults) {
+            break;
+          }
+
+          const text = normalize(element.innerText || element.textContent || '');
+          const ariaLabel = normalize(element.getAttribute('aria-label'));
+          const placeholder = normalize(element.getAttribute('placeholder'));
+
+          for (const search of searches) {
+            const needle = normalize(search).toLowerCase();
+            if (!needle) {
+              continue;
+            }
+
+            const comparisons = [
+              { value: text, kind: 'text' },
+              { value: ariaLabel, kind: 'aria-label' },
+              { value: placeholder, kind: 'placeholder' }
+            ];
+
+            const matched = comparisons.find(
+              entry => entry.value && entry.value.toLowerCase().includes(needle)
+            );
+
+            if (matched) {
+              pushResult(element, { variant: search, kind: matched.kind });
+              break;
+            }
+          }
+        }
+
+        return { variants: searches, matches: results };
+      },
+      { searches: variants, maxResults: limit }
+    );
+  }
 };

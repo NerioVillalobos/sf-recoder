@@ -28,7 +28,7 @@ to the given JSON file (relative paths resolve from the repo root).
 node src/runner.js --org <alias> --steps steps/mi-flujo.json
 ```
 
-The runner executes headlessly by default. Pass `--headful` if you want to observe execution, and `--timeout 20000` (milliseconds) to extend selector resolution when Lightning loads slowly.
+The runner executes headlessly by default. Pass `--headful` if you want to observe execution, `--timeout 20000` (milliseconds) to extend selector resolution when Lightning loads slowly, and `--debug` to capture screenshots plus diagnostic logs whenever a step fails. Debug artifacts are written as `debug-step-<n>.png` in the current working directory.
 
 ## Notes
 

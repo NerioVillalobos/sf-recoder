@@ -4,3 +4,4 @@ yarn.lock
 .DS_Store
 steps/*.json
 !sf-ui-recorder/steps/ejemplo-crear-caso.json
+debug-step-*.png

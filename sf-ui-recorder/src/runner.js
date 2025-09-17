@@ -4,7 +4,7 @@ const puppeteer = require('puppeteer');
 const minimist = require('minimist');
 const Ajv = require('ajv');
 const { getOrgInfo, buildFrontdoorUrl, DEFAULT_RET_URL } = require('./sf');
-const { resolveHandle } = require('./selectors');
+const { resolveHandle, buildTextVariants, debugTextMatches } = require('./selectors');
 
 function loadSchema() {
   const schemaPath = path.resolve(__dirname, '../schema/steps.schema.json');
@@ -142,7 +142,20 @@ async function performClick(page, step, timeoutOverride) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     }
   });
-  await target.click({ delay: 50 });
+  try {
+    await target.click({ delay: 50 });
+  } catch (err) {
+    try {
+      await target.evaluate(el => {
+        if (el) {
+          el.click();
+        }
+      });
+      console.warn('Puppeteer click failed; used DOM click fallback.');
+    } catch (fallbackError) {
+      throw err;
+    }
+  }
   await applyWait(page, step.waitFor);
 }
 
@@ -200,11 +213,62 @@ async function performWait(page, step) {
   await applyWait(page, step.waitFor);
 }
 
+async function captureDiagnostics(page, step, index, error) {
+  console.error('--- Debug diagnostics ---');
+  console.error(`Step ${index + 1} selector:`, step.selector);
+  console.error('Error:', error && error.message ? error.message : error);
+
+  if (step.selector && step.selector.type === 'text') {
+    try {
+      const variants = buildTextVariants(step.selector.value);
+      console.error('Text variants considered:', variants.join(' | '));
+      const report = await debugTextMatches(page, step.selector.value, 10);
+      if (report.matches.length === 0) {
+        console.error('No elements contained any of the variants.');
+      } else {
+        console.error('Closest matches:');
+        report.matches.forEach((match, idx) => {
+          console.error(
+            `  [${idx + 1}] <${match.tag}> via ${match.match.kind} -> "${match.text}"`
+          );
+          if (match.dataTestId) {
+            console.error(`       data-testid: ${match.dataTestId}`);
+          }
+          if (match.ariaLabel) {
+            console.error(`       aria-label: ${match.ariaLabel}`);
+          }
+          if (match.placeholder) {
+            console.error(`       placeholder: ${match.placeholder}`);
+          }
+          if (match.role) {
+            console.error(`       role: ${match.role}`);
+          }
+          if (match.cssPath) {
+            console.error(`       css: ${match.cssPath}`);
+          }
+        });
+      }
+    } catch (diagErr) {
+      console.error('Failed to analyze text matches:', diagErr.message);
+    }
+  }
+
+  const screenshotPath = path.resolve(`debug-step-${index + 1}.png`);
+  try {
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    console.error(`Saved page screenshot to ${screenshotPath}`);
+  } catch (shotErr) {
+    console.error('Failed to capture screenshot:', shotErr.message);
+  }
+
+  console.error('--- End diagnostics ---');
+}
+
 async function main() {
   const argv = minimist(process.argv.slice(2), {
     string: ['org', 'steps', 'ret', 'timeout'],
-    boolean: ['headful'],
-    alias: { org: 'o', steps: 's', ret: 'r', headful: 'H', timeout: 't' }
+    boolean: ['headful', 'debug'],
+    alias: { org: 'o', steps: 's', ret: 'r', headful: 'H', timeout: 't', debug: 'd' }
   });
 
   const orgAlias = argv.org;
@@ -212,6 +276,7 @@ async function main() {
   const retURL = argv.ret || DEFAULT_RET_URL;
   const headless = !argv.headful;
   const selectorTimeout = argv.timeout !== undefined ? Number(argv.timeout) : undefined;
+  const debugMode = Boolean(argv.debug);
 
   if (Number.isNaN(selectorTimeout)) {
     console.error('Invalid --timeout value. Expected a number of milliseconds.');
@@ -267,6 +332,9 @@ async function main() {
       }
     } catch (err) {
       console.error(`Step ${index + 1} failed:`, err.message);
+      if (debugMode) {
+        await captureDiagnostics(page, step, index, err);
+      }
       break;
     }
   }
