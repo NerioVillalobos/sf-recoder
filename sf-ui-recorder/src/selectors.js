@@ -63,6 +63,43 @@ async function queryXPath(page, expression) {
   return null;
 }
 
+async function queryShadowByText(page, value, exact) {
+  return page.evaluateHandle(
+    (search, exactMatch) => {
+      const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+
+      const queue = [];
+      if (document.documentElement) {
+        queue.push(document.documentElement);
+      }
+
+      while (queue.length) {
+        const node = queue.shift();
+        if (!(node instanceof Element)) {
+          continue;
+        }
+
+        const text = normalize(node.innerText || node.textContent);
+        if (text) {
+          if (exactMatch ? text === search : text.includes(search)) {
+            return node;
+          }
+        }
+
+        if (node.shadowRoot) {
+          queue.push(...node.shadowRoot.children);
+        }
+
+        queue.push(...node.children);
+      }
+
+      return null;
+    },
+    value,
+    exact
+  );
+}
+
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
@@ -242,6 +279,24 @@ async function byText(page, value, timeout) {
           return handle;
         }
       }
+    }
+
+    for (const variant of variants) {
+      const exactHandle = await queryShadowByText(page, variant, true);
+      const exactElement = exactHandle.asElement();
+      if (exactElement) {
+        return exactElement;
+      }
+      await exactHandle.dispose();
+    }
+
+    for (const variant of variants) {
+      const containsHandle = await queryShadowByText(page, variant, false);
+      const containsElement = containsHandle.asElement();
+      if (containsElement) {
+        return containsElement;
+      }
+      await containsHandle.dispose();
     }
 
     return null;
