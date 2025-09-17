@@ -20,6 +20,17 @@ function loadSteps(filePath) {
   return JSON.parse(contents);
 }
 
+async function wait(page, ms) {
+  if (ms <= 0) {
+    return;
+  }
+  if (page && typeof page.waitForTimeout === 'function') {
+    await page.waitForTimeout(ms);
+  } else {
+    await new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+
 function waitDuration(waitFor) {
   if (!waitFor) {
     return 200;
@@ -40,9 +51,7 @@ function waitDuration(waitFor) {
 
 async function applyWait(page, waitFor) {
   const duration = waitDuration(waitFor);
-  if (duration > 0) {
-    await page.waitForTimeout(duration);
-  }
+  await wait(page, duration);
 }
 
 async function performClick(page, step) {
@@ -149,7 +158,7 @@ async function main() {
 
   console.log(`Opening ${frontdoorUrl}`);
   await page.goto(frontdoorUrl, { waitUntil: 'networkidle2' });
-  await page.waitForTimeout(1000);
+  await wait(page, 1000);
 
   for (const [index, step] of steps.entries()) {
     console.log(`Executing step ${index + 1}/${steps.length}: ${step.action}`);
