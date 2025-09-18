@@ -314,9 +314,24 @@ async function byLabel(page, value, timeout) {
           }
         }
       }
-      const aria = Array.from(document.querySelectorAll('[aria-label]'))
-        .find(el => normalize(el.getAttribute('aria-label')) === search);
-      return aria || null;
+
+      const attributeSelectors = ['[aria-label]', '[title]', '[data-label]', '[data-name]', '[data-value]', '[data-target-selection-name]'];
+      for (const selector of attributeSelectors) {
+        const matches = Array.from(document.querySelectorAll(selector));
+        for (const el of matches) {
+          const attributeValue = selector === '[aria-label]' ? el.getAttribute('aria-label') :
+            selector === '[title]' ? el.getAttribute('title') :
+            selector === '[data-label]' ? el.getAttribute('data-label') :
+            selector === '[data-name]' ? el.getAttribute('data-name') :
+            selector === '[data-value]' ? el.getAttribute('data-value') :
+            el.getAttribute('data-target-selection-name');
+          if (normalize(attributeValue) === search) {
+            return el;
+          }
+        }
+      }
+
+      return null;
     }, value);
     const element = handle.asElement();
     if (element) {
@@ -399,7 +414,7 @@ async function byText(page, value, timeout) {
       const attrExactHandle = await queryShadowByAttributes(
         page,
         variant,
-        ['placeholder', 'aria-label', 'title', 'data-label'],
+        ['placeholder', 'aria-label', 'title', 'data-label', 'data-name', 'data-value', 'data-target-selection-name'],
         true
       );
       const attrExactElement = attrExactHandle.asElement();
@@ -420,7 +435,7 @@ async function byText(page, value, timeout) {
       const attrContainsHandle = await queryShadowByAttributes(
         page,
         variant,
-        ['placeholder', 'aria-label', 'title', 'data-label'],
+        ['placeholder', 'aria-label', 'title', 'data-label', 'data-name', 'data-value', 'data-target-selection-name'],
         false
       );
       const attrContainsElement = attrContainsHandle.asElement();

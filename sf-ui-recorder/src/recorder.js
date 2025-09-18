@@ -200,6 +200,18 @@ async function main() {
           }
         }
 
+        const attributeCandidates = ['data-label', 'data-name', 'data-value', 'data-target-selection-name', 'title'];
+        for (const attr of attributeCandidates) {
+          const raw = element.getAttribute(attr);
+          if (!raw) {
+            continue;
+          }
+          const cleaned = sanitizeText(raw);
+          if (cleaned) {
+            return { type: 'label', value: cleaned };
+          }
+        }
+
         const aria = element.getAttribute('aria-label');
         if (aria) {
           const cleaned = sanitizeText(aria);
