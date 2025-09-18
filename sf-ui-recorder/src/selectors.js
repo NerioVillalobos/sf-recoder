@@ -342,13 +342,17 @@ async function byText(page, value, timeout) {
         `//lightning-formatted-text[normalize-space()=${literal}]`,
         `//*[@placeholder and normalize-space(@placeholder)=${literal}]`,
         `//*[@aria-label and normalize-space(@aria-label)=${literal}]`,
+        `//*[@title and normalize-space(@title)=${literal}]`,
+        `//*[@data-label and normalize-space(@data-label)=${literal}]`,
         `//button[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
         `//a[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
         `//span[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
         `//div[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
         `//lightning-formatted-text[translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
         `//*[@placeholder and translate(normalize-space(@placeholder), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
-        `//*[@aria-label and translate(normalize-space(@aria-label), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`
+        `//*[@aria-label and translate(normalize-space(@aria-label), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
+        `//*[@title and translate(normalize-space(@title), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`,
+        `//*[@data-label and translate(normalize-space(@data-label), '${XPATH_UPPER}', '${XPATH_LOWER}')=${lowerLiteral}]`
       ];
 
       for (const query of exactQueries) {
@@ -370,13 +374,17 @@ async function byText(page, value, timeout) {
         `//lightning-formatted-text[contains(normalize-space(), ${literal})]`,
         `//*[@placeholder and contains(normalize-space(@placeholder), ${literal})]`,
         `//*[@aria-label and contains(normalize-space(@aria-label), ${literal})]`,
+        `//*[@title and contains(normalize-space(@title), ${literal})]`,
+        `//*[@data-label and contains(normalize-space(@data-label), ${literal})]`,
         `//button[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
         `//a[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
         `//span[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
         `//div[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
         `//lightning-formatted-text[contains(translate(normalize-space(), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
         `//*[@placeholder and contains(translate(normalize-space(@placeholder), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
-        `//*[@aria-label and contains(translate(normalize-space(@aria-label), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`
+        `//*[@aria-label and contains(translate(normalize-space(@aria-label), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
+        `//*[@title and contains(translate(normalize-space(@title), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`,
+        `//*[@data-label and contains(translate(normalize-space(@data-label), '${XPATH_UPPER}', '${XPATH_LOWER}'), ${lowerLiteral})]`
       ];
 
       for (const query of containsQueries) {
@@ -391,7 +399,7 @@ async function byText(page, value, timeout) {
       const attrExactHandle = await queryShadowByAttributes(
         page,
         variant,
-        ['placeholder', 'aria-label'],
+        ['placeholder', 'aria-label', 'title', 'data-label'],
         true
       );
       const attrExactElement = attrExactHandle.asElement();
@@ -412,7 +420,7 @@ async function byText(page, value, timeout) {
       const attrContainsHandle = await queryShadowByAttributes(
         page,
         variant,
-        ['placeholder', 'aria-label'],
+        ['placeholder', 'aria-label', 'title', 'data-label'],
         false
       );
       const attrContainsElement = attrContainsHandle.asElement();
