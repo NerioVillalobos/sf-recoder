@@ -179,14 +179,33 @@ async function main() {
         return parts.join(' > ');
       }
 
-      function buildSelector(target) {
-        if (!target || !(target instanceof Element)) {
-          return null;
+      function candidateElementsFor(target) {
+        const seen = new Set();
+        const elements = [];
+
+        if (target && typeof target.composedPath === 'function') {
+          const path = target.composedPath();
+          for (const entry of path) {
+            if (entry instanceof Element && !seen.has(entry)) {
+              seen.add(entry);
+              elements.push(entry);
+            }
+          }
         }
 
-        const actionable = target.closest('[data-testid], button, a, input, textarea, select, [role="button"], [role="menuitem"], [role="tab"], lightning-button, lightning-base-combobox, lightning-input');
-        const element = actionable || target;
+        let current = target instanceof Element ? target : null;
+        while (current) {
+          if (!seen.has(current)) {
+            seen.add(current);
+            elements.push(current);
+          }
+          current = current.parentElement;
+        }
 
+        return elements;
+      }
+
+      function deriveSelector(element) {
         const dataTestId = element.getAttribute('data-testid') || element.dataset.testid;
         if (dataTestId) {
           return { type: 'dataTestId', value: normalize(dataTestId) };
@@ -200,7 +219,7 @@ async function main() {
           }
         }
 
-        const attributeCandidates = ['data-label', 'data-name', 'data-value', 'data-target-selection-name', 'title'];
+        const attributeCandidates = ['data-label', 'data-name', 'data-value', 'data-target-selection-name', 'data-id', 'title'];
         for (const attr of attributeCandidates) {
           const raw = element.getAttribute(attr);
           if (!raw) {
@@ -237,6 +256,30 @@ async function main() {
         const path = cssPath(element);
         if (path) {
           return { type: 'css', value: path };
+        }
+
+        return null;
+      }
+
+      function buildSelector(target) {
+        if (!target || !(target instanceof Element)) {
+          return null;
+        }
+
+        const candidates = candidateElementsFor(target);
+        for (const element of candidates) {
+          const selector = deriveSelector(element);
+          if (selector) {
+            return selector;
+          }
+
+          const actionable = element.closest('[data-testid], button, a, input, textarea, select, [role="button"], [role="menuitem"], [role="tab"], lightning-button, lightning-base-combobox, lightning-input');
+          if (actionable && !candidates.includes(actionable)) {
+            const fallback = deriveSelector(actionable);
+            if (fallback) {
+              return fallback;
+            }
+          }
         }
 
         return null;
