@@ -1,80 +1,196 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Recorded Steps",
-  "type": "array",
-  "items": {
-    "type": "object",
-    "required": ["action", "selector"],
-    "properties": {
-      "action": {
-        "type": "string",
-        "enum": ["click", "type", "wait"]
-      },
-      "selector": {
-        "$ref": "#/definitions/selector"
-      },
-      "value": {
-        "type": "string"
-      },
-      "delay": {
-        "type": "integer",
-        "minimum": 0
-      },
-      "waitFor": {
-        "$ref": "#/definitions/waitFor"
-      }
-    },
-    "additionalProperties": false,
-    "allOf": [
-      {
-        "if": {
-          "properties": {"action": {"const": "type"}}
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "number"
         },
-        "then": {
-          "required": ["value"]
-        }
-      },
-      {
-        "if": {
-          "properties": {"action": {"const": "wait"}}
+        "meta": {
+          "type": "object",
+          "additionalProperties": true
         },
-        "then": {
-          "required": ["waitFor"],
+        "start": {
+          "type": "object",
           "properties": {
-            "selector": false
+            "retURL": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Step"
           }
         }
+      },
+      "required": ["steps"],
+      "additionalProperties": false
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Step"
       }
-    ]
-  },
+    }
+  ],
   "definitions": {
-    "selector": {
+    "Step": {
       "type": "object",
-      "required": ["type", "value"],
       "properties": {
-        "type": {
+        "action": {
           "type": "string",
-          "enum": ["label", "text", "dataTestId", "css", "xpath", "role"]
+          "enum": ["click", "type", "wait"]
+        },
+        "selector": {
+          "$ref": "#/definitions/Selector"
         },
         "value": {
           "type": "string"
+        },
+        "delay": {
+          "type": "number"
+        },
+        "waitFor": {
+          "$ref": "#/definitions/WaitFor"
+        },
+        "ms": {
+          "type": "number"
+        },
+        "timestamp": {
+          "type": "number"
         }
       },
-      "additionalProperties": false
+      "required": ["action"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "enum": ["click", "type"]
+              }
+            }
+          },
+          "then": {
+            "required": ["selector"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "type"
+              }
+            }
+          },
+          "then": {
+            "required": ["value"]
+          }
+        }
+      ]
     },
-    "waitFor": {
+    "WaitFor": {
       "type": "object",
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["short", "medium", "long"]
+          "enum": ["networkidle", "short", "dom"]
         },
-        "ms": {
-          "type": "integer",
-          "minimum": 0
+        "selector": {
+          "$ref": "#/definitions/Selector"
         }
       },
       "additionalProperties": false
+    },
+    "Selector": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "dataTestId"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "css"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "xpath"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "text"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "label"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "text"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "role"
+            },
+            "role": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": ["type", "role", "name"],
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }

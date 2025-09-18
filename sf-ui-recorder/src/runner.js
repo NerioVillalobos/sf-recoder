@@ -220,9 +220,10 @@ async function captureDiagnostics(page, step, index, error) {
 
   if (step.selector && step.selector.type === 'text') {
     try {
-      const variants = buildTextVariants(step.selector.value);
+      const textValue = step.selector.text ?? step.selector.value ?? '';
+      const variants = buildTextVariants(textValue);
       console.error('Text variants considered:', variants.join(' | '));
-      const report = await debugTextMatches(page, step.selector.value, 10);
+      const report = await debugTextMatches(page, textValue, 10);
       if (report.matches.length === 0) {
         console.error('No elements contained any of the variants.');
       } else {
@@ -289,11 +290,21 @@ async function main() {
   }
 
   const schema = loadSchema();
-  const steps = loadSteps(stepsPath);
+  const plan = loadSteps(stepsPath);
 
   const ajv = new Ajv({ allErrors: true, strict: false });
   const validate = ajv.compile(schema);
-  if (!validate(steps)) {
+  let steps;
+  if (Array.isArray(plan)) {
+    steps = plan;
+  } else if (plan && Array.isArray(plan.steps)) {
+    steps = plan.steps;
+  } else {
+    console.error('Steps file must be an array or an object with a steps array.');
+    process.exit(1);
+  }
+
+  if (!validate(plan)) {
     console.error('Steps file failed validation:', validate.errors);
     process.exit(1);
   }
