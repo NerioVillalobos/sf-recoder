@@ -35,12 +35,25 @@ async function main() {
     }
   }
 
+  const describeSelector = selector => {
+    if (!selector) {
+      return 'unknown';
+    }
+    if (selector.type === 'role') {
+      return `role:${selector.role} name:${selector.name}`;
+    }
+    if (selector.type === 'label' || selector.type === 'text') {
+      return `${selector.type}:${selector.text}`;
+    }
+    return `${selector.type}:${selector.value}`;
+  };
+
   let writeChain = Promise.resolve();
   const saveStep = step => {
     writeChain = writeChain.then(async () => {
       steps.push(step);
       await fs.promises.writeFile(outputPath, JSON.stringify(steps, null, 2));
-      console.log(`Recorded ${step.action} -> ${step.selector.type}:${step.selector.value}`);
+      console.log(`Recorded ${step.action} -> ${describeSelector(step.selector)}`);
     }).catch(err => {
       console.error('Failed to persist step:', err.message);
     });
@@ -81,55 +94,40 @@ async function main() {
         };
       }
 
-    const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
-    const TEXT_SUFFIX_PATTERNS = [
-      /Opens in a new tab/i,
-      /Opens in new tab/i,
-      /Opens in a new window/i,
-      /Opens in new window/i,
-      /Press Enter to open/i,
-      /Press Space to open/i,
-      /Press enter to activate/i,
-      /Press space to activate/i
-    ];
+      const MAX_TEXT_LENGTH = 80;
+      const ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],button,a,[role="tab"],[role="link"],input,textarea,select';
+      const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+      const limit = text => {
+        const normalized = normalize(text);
+        if (!normalized) {
+          return '';
+        }
+        return normalized.length > MAX_TEXT_LENGTH ? normalized.slice(0, MAX_TEXT_LENGTH).trim() : normalized;
+      };
 
-    function sanitizeText(text) {
-      const normalized = normalize(text);
-      if (!normalized) {
-        return '';
-      }
-
-      for (const pattern of TEXT_SUFFIX_PATTERNS) {
-        const matchIndex = normalized.search(pattern);
-        if (matchIndex > 0) {
-          const shortened = normalize(normalized.slice(0, matchIndex));
-          if (shortened) {
-            return shortened;
+      function nextCandidate(node) {
+        if (!node) {
+          return null;
+        }
+        if (node.assignedSlot) {
+          return node.assignedSlot;
+        }
+        if (node.parentElement) {
+          return node.parentElement;
+        }
+        if (node.getRootNode) {
+          const root = node.getRootNode();
+          if (root && root.host) {
+            return root.host;
           }
         }
+        return null;
       }
-
-      const hyphenIndex = normalized.indexOf(' - ');
-      if (hyphenIndex > 0) {
-        const beforeHyphen = normalize(normalized.slice(0, hyphenIndex));
-        if (beforeHyphen) {
-          return beforeHyphen;
-        }
-      }
-
-      const colonIndex = normalized.indexOf(':');
-      if (colonIndex > 0) {
-        const beforeColon = normalize(normalized.slice(0, colonIndex));
-        if (beforeColon) {
-          return beforeColon;
-        }
-      }
-
-      return normalized.length > 140 ? normalized.slice(0, 140).trim() : normalized;
-    }
 
       function findLabelFor(el) {
-        if (!el) return null;
+        if (!el) {
+          return null;
+        }
         if (el.labels && el.labels.length > 0) {
           return el.labels[0];
         }
@@ -140,146 +138,211 @@ async function main() {
             return direct;
           }
         }
-        let parent = el.parentElement;
-        while (parent) {
-          if (parent.tagName === 'LABEL') {
-            return parent;
+        let current = el.parentElement;
+        while (current) {
+          if (current.tagName === 'LABEL') {
+            return current;
           }
-          parent = parent.parentElement;
+          current = current.parentElement;
         }
         return null;
       }
 
-      function cssPath(el) {
+      function accessibleName(el) {
         if (!(el instanceof Element)) {
-          return null;
+          return '';
         }
-        const parts = [];
-        let current = el;
-        while (current && current.nodeType === 1 && current !== document.body) {
-          let selector = current.tagName.toLowerCase();
-          if (current.id) {
-            selector = `${selector}#${current.id}`;
-            parts.unshift(selector);
-            break;
-          } else {
-            let siblingIndex = 1;
-            let sibling = current.previousElementSibling;
-            while (sibling) {
-              if (sibling.tagName === current.tagName) {
-                siblingIndex += 1;
-              }
-              sibling = sibling.previousElementSibling;
-            }
-            selector += `:nth-of-type(${siblingIndex})`;
+
+        const ariaLabel = el.getAttribute('aria-label');
+        if (ariaLabel) {
+          const limited = limit(ariaLabel);
+          if (limited) {
+            return limited;
           }
-          parts.unshift(selector);
-          current = current.parentElement;
         }
-        return parts.join(' > ');
-      }
 
-      function candidateElementsFor(target) {
-        const seen = new Set();
-        const elements = [];
-
-        if (target && typeof target.composedPath === 'function') {
-          const path = target.composedPath();
-          for (const entry of path) {
-            if (entry instanceof Element && !seen.has(entry)) {
-              seen.add(entry);
-              elements.push(entry);
+        const labelledBy = el.getAttribute('aria-labelledby');
+        if (labelledBy) {
+          const ids = labelledBy.split(/\s+/).filter(Boolean);
+          const parts = ids.map(id => {
+            const label = document.getElementById(id);
+            return label ? normalize(label.textContent) : '';
+          }).filter(Boolean);
+          if (parts.length) {
+            const combined = limit(parts.join(' '));
+            if (combined) {
+              return combined;
             }
           }
         }
 
-        let current = target instanceof Element ? target : null;
-        while (current) {
-          if (!seen.has(current)) {
-            seen.add(current);
-            elements.push(current);
+        const title = el.getAttribute('title');
+        if (title) {
+          const limited = limit(title);
+          if (limited) {
+            return limited;
           }
-          current = current.parentElement;
         }
 
-        return elements;
+        const visible = limit(el.innerText || el.textContent);
+        if (visible) {
+          return visible;
+        }
+
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+          const placeholder = el.getAttribute('placeholder');
+          if (placeholder) {
+            const limited = limit(placeholder);
+            if (limited) {
+              return limited;
+            }
+          }
+        }
+
+        return '';
       }
 
-      function deriveSelector(element) {
-        const dataTestId = element.getAttribute('data-testid') || element.dataset.testid;
-        if (dataTestId) {
-          return { type: 'dataTestId', value: normalize(dataTestId) };
-        }
-
-        const label = findLabelFor(element);
+      function labelTextForInput(el) {
+        const label = findLabelFor(el);
         if (label) {
-          const text = normalize(label.textContent);
+          const text = limit(label.textContent);
           if (text) {
-            return { type: 'label', value: text };
+            return text;
           }
         }
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+          const placeholder = el.getAttribute('placeholder');
+          if (placeholder) {
+            const text = limit(placeholder);
+            if (text) {
+              return text;
+            }
+          }
+        }
+        const aria = el.getAttribute('aria-label');
+        if (aria) {
+          const text = limit(aria);
+          if (text) {
+            return text;
+          }
+        }
+        return '';
+      }
 
-        const attributeCandidates = ['data-label', 'data-name', 'data-value', 'data-target-selection-name', 'data-id', 'title'];
-        for (const attr of attributeCandidates) {
-          const raw = element.getAttribute(attr);
-          if (!raw) {
+      function absoluteXPath(el) {
+        if (!(el instanceof Element)) {
+          return '';
+        }
+        const segments = [];
+        let current = el;
+        while (current && current.nodeType === 1) {
+          let index = 1;
+          let sibling = current.previousSibling;
+          while (sibling) {
+            if (sibling.nodeType === 1 && sibling.nodeName === current.nodeName) {
+              index += 1;
+            }
+            sibling = sibling.previousSibling;
+          }
+          segments.unshift(`${current.nodeName.toLowerCase()}[${index}]`);
+          const parent = current.parentNode || (current.getRootNode && current.getRootNode().host);
+          if (!parent || parent === current || parent.nodeType === 9) {
+            break;
+          }
+          current = parent;
+        }
+        return '/' + segments.join('/');
+      }
+
+      function climbFor(element, predicate) {
+        const visited = new Set();
+        let current = element;
+        while (current && !visited.has(current)) {
+          visited.add(current);
+          if (current instanceof Element && predicate(current)) {
+            return current;
+          }
+          current = nextCandidate(current);
+        }
+        return null;
+      }
+
+      function findActionable(path) {
+        const items = Array.isArray(path) ? path : [];
+        for (const node of items) {
+          if (!(node instanceof Element)) {
             continue;
           }
-          const cleaned = sanitizeText(raw);
-          if (cleaned) {
-            return { type: 'label', value: cleaned };
+          const actionable = climbFor(node, el => el.matches(ACTIONABLE_QUERY));
+          if (actionable) {
+            return actionable;
           }
         }
 
-        const aria = element.getAttribute('aria-label');
-        if (aria) {
-          const cleaned = sanitizeText(aria);
-          if (cleaned) {
-            return { type: 'label', value: cleaned };
+        for (const node of items) {
+          if (!(node instanceof Element)) {
+            continue;
+          }
+          const dataCandidate = climbFor(node, el => el.hasAttribute('data-testid') || (el.dataset && el.dataset.testid));
+          if (dataCandidate) {
+            return dataCandidate;
           }
         }
 
-        const textContent = sanitizeText(element.innerText || element.textContent);
-        if (textContent) {
-          return { type: 'text', value: textContent };
+        for (const node of items) {
+          if (!(node instanceof Element)) {
+            continue;
+          }
+          const labelled = climbFor(node, el => el.hasAttribute('title') || el.hasAttribute('aria-label'));
+          if (labelled) {
+            return labelled;
+          }
         }
 
-        if (element.id) {
-          return { type: 'css', value: `#${element.id}` };
-        }
-
-        const role = element.getAttribute('role');
-        if (role) {
-          return { type: 'role', value: role };
-        }
-
-        const path = cssPath(element);
-        if (path) {
-          return { type: 'css', value: path };
+        for (const node of items) {
+          if (node instanceof Element) {
+            return node;
+          }
         }
 
         return null;
       }
 
-      function buildSelector(target) {
-        if (!target || !(target instanceof Element)) {
+      function buildSelector(target, path) {
+        const element = findActionable(path) || (target instanceof Element ? target : null);
+        if (!element) {
           return null;
         }
 
-        const candidates = candidateElementsFor(target);
-        for (const element of candidates) {
-          const selector = deriveSelector(element);
-          if (selector) {
-            return selector;
-          }
+        const dataTestId = element.getAttribute('data-testid') || (element.dataset && element.dataset.testid);
+        if (dataTestId) {
+          return { type: 'dataTestId', value: limit(dataTestId) };
+        }
 
-          const actionable = element.closest('[data-testid], button, a, input, textarea, select, [role="button"], [role="menuitem"], [role="tab"], lightning-button, lightning-base-combobox, lightning-input');
-          if (actionable && !candidates.includes(actionable)) {
-            const fallback = deriveSelector(actionable);
-            if (fallback) {
-              return fallback;
-            }
+        const role = (element.getAttribute('role') || '').trim().toLowerCase();
+        const roleNames = new Set(['menuitem', 'option', 'button', 'tab', 'link']);
+        if (role && roleNames.has(role)) {
+          const name = accessibleName(element);
+          if (name) {
+            return { type: 'role', role, name };
           }
+        }
+
+        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+          const labelText = labelTextForInput(element);
+          if (labelText) {
+            return { type: 'label', text: labelText };
+          }
+        }
+
+        const ariaName = accessibleName(element);
+        if (ariaName) {
+          return { type: 'text', text: ariaName };
+        }
+
+        const xpath = absoluteXPath(element);
+        if (xpath) {
+          return { type: 'xpath', value: xpath };
         }
 
         return null;
@@ -289,13 +352,15 @@ async function main() {
         if (event.button !== 0) {
           return;
         }
-        const selector = buildSelector(event.target);
+        const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
+        const selector = buildSelector(event.target, path);
         if (!selector) {
           return;
         }
         window.sfRecordEvent({
           action: 'click',
           selector,
+          timestamp: Date.now(),
           waitFor: { type: 'short' }
         });
       }
@@ -305,7 +370,8 @@ async function main() {
         if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement)) {
           return;
         }
-        const selector = buildSelector(target);
+        const path = typeof event.composedPath === 'function' ? event.composedPath() : [target];
+        const selector = buildSelector(target, path);
         if (!selector) {
           return;
         }

@@ -1,5 +1,6 @@
 const DEFAULT_TIMEOUT = 20000;
 const POLL_INTERVAL = 250;
+const MAX_TEXT_LENGTH = 80;
 
 async function sleep(page, ms) {
   if (ms <= 0) {
@@ -22,6 +23,14 @@ function xpathLiteral(value) {
   }
   const parts = value.split("'").map(part => `'${part}'`);
   return `concat(${parts.join(", '\'', ")})`;
+}
+
+function trimAndLimit(value) {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return '';
+  }
+  return normalized.length > MAX_TEXT_LENGTH ? normalized.slice(0, MAX_TEXT_LENGTH).trim() : normalized;
 }
 
 async function waitForHandle(page, getter, timeout = DEFAULT_TIMEOUT) {
@@ -283,6 +292,9 @@ function buildTextVariants(value) {
 }
 
 async function byDataTestId(page, value, timeout) {
+  if (!value) {
+    return null;
+  }
   return waitForHandle(page, async () => {
     const selector = `[data-testid="${cssEscape(value)}"]`;
     const handle = await page.$(selector);
@@ -291,13 +303,30 @@ async function byDataTestId(page, value, timeout) {
 }
 
 async function byLabel(page, value, timeout) {
+  const search = trimAndLimit(value);
+  if (!search) {
+    return null;
+  }
   return waitForHandle(page, async () => {
     const handle = await page.evaluateHandle(labelText => {
-      const normalize = text => text ? text.replace(/\s+/g, ' ').trim() : '';
-      const search = normalize(labelText);
+      const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+      const limit = value => {
+        const normalized = normalize(value);
+        if (!normalized) {
+          return '';
+        }
+        return normalized.length > 80 ? normalized.slice(0, 80).trim() : normalized;
+      };
+      const searchValue = limit(labelText);
+      if (!searchValue) {
+        return null;
+      }
+
+      const matchesSearch = candidate => limit(candidate) === searchValue;
+
       const labels = Array.from(document.querySelectorAll('label'));
       for (const label of labels) {
-        if (normalize(label.textContent) === search) {
+        if (matchesSearch(label.textContent)) {
           if (label.control) {
             return label.control;
           }
@@ -319,20 +348,21 @@ async function byLabel(page, value, timeout) {
       for (const selector of attributeSelectors) {
         const matches = Array.from(document.querySelectorAll(selector));
         for (const el of matches) {
-          const attributeValue = selector === '[aria-label]' ? el.getAttribute('aria-label') :
-            selector === '[title]' ? el.getAttribute('title') :
-            selector === '[data-label]' ? el.getAttribute('data-label') :
-            selector === '[data-name]' ? el.getAttribute('data-name') :
-            selector === '[data-value]' ? el.getAttribute('data-value') :
-            el.getAttribute('data-target-selection-name');
-          if (normalize(attributeValue) === search) {
+          const attributeValue =
+            selector === '[aria-label]' ? el.getAttribute('aria-label') :
+              selector === '[title]' ? el.getAttribute('title') :
+                selector === '[data-label]' ? el.getAttribute('data-label') :
+                  selector === '[data-name]' ? el.getAttribute('data-name') :
+                    selector === '[data-value]' ? el.getAttribute('data-value') :
+                      el.getAttribute('data-target-selection-name');
+          if (matchesSearch(attributeValue)) {
             return el;
           }
         }
       }
 
       return null;
-    }, value);
+    }, search);
     const element = handle.asElement();
     if (element) {
       return element;
@@ -343,7 +373,11 @@ async function byLabel(page, value, timeout) {
 }
 
 async function byText(page, value, timeout) {
-  const variants = buildTextVariants(value);
+  const base = trimAndLimit(value);
+  if (!base) {
+    return null;
+  }
+  const variants = buildTextVariants(base);
 
   return waitForHandle(page, async () => {
     for (const variant of variants) {
@@ -457,55 +491,203 @@ async function byText(page, value, timeout) {
 }
 
 async function byCss(page, value, timeout) {
+  if (!value) {
+    return null;
+  }
   return waitForHandle(page, async () => page.$(value), timeout);
 }
 
 async function byXpath(page, value, timeout) {
+  if (!value) {
+    return null;
+  }
   return waitForHandle(page, async () => queryXPath(page, value), timeout);
 }
 
-async function byRole(page, value, timeout) {
+async function byRole(page, role, name, timeout) {
+  const desiredRole = String(role || '').trim().toLowerCase();
+  const desiredName = trimAndLimit(name);
+  if (!desiredRole || !desiredName) {
+    return null;
+  }
+
   return waitForHandle(page, async () => {
-    const selector = `[role="${cssEscape(value)}"]`;
-    const handle = await page.$(selector);
-    return handle;
+    const handle = await page.evaluateHandle((targetRole, targetName, maxLength) => {
+      const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+      const limit = value => {
+        const normalized = normalize(value);
+        if (!normalized) {
+          return '';
+        }
+        return normalized.length > maxLength ? normalized.slice(0, maxLength).trim() : normalized;
+      };
+
+      function accessibleName(el) {
+        if (!(el instanceof Element)) {
+          return '';
+        }
+
+        const ariaLabel = el.getAttribute('aria-label');
+        if (ariaLabel) {
+          const limited = limit(ariaLabel);
+          if (limited) {
+            return limited;
+          }
+        }
+
+        const labelledBy = el.getAttribute('aria-labelledby');
+        if (labelledBy) {
+          const ids = labelledBy.split(/\s+/).filter(Boolean);
+          const parts = ids
+            .map(id => {
+              const element = document.getElementById(id);
+              return element ? normalize(element.textContent) : '';
+            })
+            .filter(Boolean);
+          if (parts.length) {
+            const combined = limit(parts.join(' '));
+            if (combined) {
+              return combined;
+            }
+          }
+        }
+
+        const title = el.getAttribute('title');
+        if (title) {
+          const limited = limit(title);
+          if (limited) {
+            return limited;
+          }
+        }
+
+        const visible = limit(el.innerText || el.textContent);
+        if (visible) {
+          return visible;
+        }
+
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+          const placeholder = el.getAttribute('placeholder');
+          if (placeholder) {
+            const limited = limit(placeholder);
+            if (limited) {
+              return limited;
+            }
+          }
+        }
+
+        return '';
+      }
+
+      function pushChildren(queue, node) {
+        if (!node) {
+          return;
+        }
+        if (node instanceof Element) {
+          queue.push(...Array.from(node.children));
+          if (node.shadowRoot) {
+            queue.push(node.shadowRoot);
+            const slots = node.shadowRoot.querySelectorAll ? Array.from(node.shadowRoot.querySelectorAll('slot')) : [];
+            for (const slot of slots) {
+              const assigned = slot.assignedElements ? slot.assignedElements() : [];
+              queue.push(...assigned);
+            }
+          }
+          if (node.tagName === 'SLOT') {
+            const assigned = node.assignedElements ? node.assignedElements() : [];
+            queue.push(...assigned);
+          }
+        } else if (node instanceof ShadowRoot || node instanceof DocumentFragment || node instanceof Document) {
+          queue.push(...Array.from(node.children || []));
+        }
+      }
+
+      const queue = [];
+      const matches = [];
+      const seen = new Set();
+
+      if (document) {
+        queue.push(document);
+      }
+
+      while (queue.length) {
+        const node = queue.shift();
+        if (!node || seen.has(node)) {
+          continue;
+        }
+        seen.add(node);
+
+        if (node instanceof Element) {
+          const roleValue = (node.getAttribute('role') || '').trim().toLowerCase();
+          if (roleValue === targetRole) {
+            const name = accessibleName(node);
+            if (name === targetName) {
+              const rect = node.getBoundingClientRect();
+              const area = Math.max(rect.width, 0) * Math.max(rect.height, 0) || Number.POSITIVE_INFINITY;
+              matches.push({ node, area });
+            }
+          }
+        }
+
+        pushChildren(queue, node instanceof Element ? node : null);
+        if (node instanceof ShadowRoot || node instanceof DocumentFragment || node instanceof Document) {
+          pushChildren(queue, node);
+        }
+      }
+
+      if (!matches.length) {
+        return null;
+      }
+
+      matches.sort((a, b) => a.area - b.area);
+      return matches[0].node;
+    }, desiredRole, desiredName, MAX_TEXT_LENGTH);
+
+    const element = handle.asElement();
+    if (element) {
+      return element;
+    }
+    await handle.dispose();
+    return null;
   }, timeout);
 }
 
 async function resolveHandle(page, selector, options = {}) {
-  if (!selector || !selector.type || !selector.value) {
+  if (!selector || !selector.type) {
     throw new Error('Invalid selector provided.');
   }
 
   const timeout = options.timeout ?? DEFAULT_TIMEOUT;
-  const value = selector.value;
   let handle = null;
 
   switch (selector.type) {
     case 'dataTestId':
-      handle = await byDataTestId(page, value, timeout);
+      handle = await byDataTestId(page, selector.value, timeout);
       break;
     case 'label':
-      handle = await byLabel(page, value, timeout);
+      handle = await byLabel(page, selector.text ?? selector.value, timeout);
       break;
     case 'text':
-      handle = await byText(page, value, timeout);
+      handle = await byText(page, selector.text ?? selector.value, timeout);
       break;
     case 'css':
-      handle = await byCss(page, value, timeout);
+      handle = await byCss(page, selector.value, timeout);
       break;
     case 'xpath':
-      handle = await byXpath(page, value, timeout);
+      handle = await byXpath(page, selector.value, timeout);
       break;
     case 'role':
-      handle = await byRole(page, value, timeout);
+      handle = await byRole(page, selector.role, selector.name ?? selector.value, timeout);
       break;
     default:
       throw new Error(`Unsupported selector type: ${selector.type}`);
   }
 
   if (!handle) {
-    throw new Error(`Could not resolve selector (${selector.type}: ${selector.value}) within ${timeout}ms.`);
+    const descriptor =
+      selector.type === 'role'
+        ? `${selector.role || 'unknown'}:${selector.name || 'unknown'}`
+        : selector.text || selector.value || 'unknown';
+    throw new Error(`Could not resolve selector (${selector.type}: ${descriptor}) within ${timeout}ms.`);
   }
 
   return handle;
