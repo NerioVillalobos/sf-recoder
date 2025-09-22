@@ -156,6 +156,15 @@
             },
             "text": {
               "type": "string"
+            },
+            "match": {
+              "type": "string",
+              "enum": ["equals", "contains", "regex"],
+              "default": "equals"
+            },
+            "flags": {
+              "type": "string",
+              "pattern": "^[gimsuy]*$"
             }
           },
           "required": ["type", "text"],

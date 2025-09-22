@@ -60,8 +60,11 @@ async function queryXPath(page, expression) {
   if (typeof page.$x === 'function') {
     const handles = await page.$x(expression);
     if (handles.length > 0) {
-      return handles[0];
+      const [first, ...rest] = handles;
+      await Promise.all(rest.map(handle => handle.dispose()));
+      return first;
     }
+    await Promise.all(handles.map(handle => handle.dispose()));
   }
 
   const handle = await page.evaluateHandle(xpath => {
@@ -196,6 +199,70 @@ async function queryShadowByAttributes(page, value, attributes, exact) {
     value,
     attributes,
     exact
+  );
+}
+
+async function queryShadowByRegex(page, source, flags) {
+  return page.evaluateHandle(
+    ({ pattern, patternFlags }) => {
+      const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
+      let regex;
+      try {
+        regex = new RegExp(pattern, patternFlags);
+      } catch (err) {
+        return null;
+      }
+
+      const queue = [];
+      if (document.documentElement) {
+        queue.push(document.documentElement);
+      }
+
+      while (queue.length) {
+        const node = queue.shift();
+        if (!(node instanceof Element)) {
+          continue;
+        }
+
+        const candidates = [];
+        const inner = node.innerText || node.textContent;
+        if (inner) {
+          candidates.push(inner);
+        }
+        const attrs = ['aria-label', 'title', 'placeholder', 'data-label', 'data-name', 'data-value', 'data-target-selection-name'];
+        for (const attr of attrs) {
+          const value = node.getAttribute(attr);
+          if (value) {
+            candidates.push(value);
+          }
+        }
+
+        for (const candidate of candidates) {
+          const normalized = normalize(candidate);
+          if (!normalized) {
+            continue;
+          }
+          regex.lastIndex = 0;
+          if (regex.test(normalized)) {
+            return node;
+          }
+        }
+
+        if (node.shadowRoot) {
+          queue.push(...node.shadowRoot.children);
+          const slots = Array.from(node.shadowRoot.querySelectorAll('slot'));
+          for (const slot of slots) {
+            const assigned = slot.assignedElements ? slot.assignedElements() : [];
+            queue.push(...assigned);
+          }
+        }
+
+        queue.push(...node.children);
+      }
+
+      return null;
+    },
+    { pattern: source, patternFlags: flags }
   );
 }
 
@@ -372,14 +439,40 @@ async function byLabel(page, value, timeout) {
   }, timeout);
 }
 
-async function byText(page, value, timeout) {
-  const base = trimAndLimit(value);
+async function byText(page, selector, timeout) {
+  const matchMode = String(selector.match || 'equals').toLowerCase();
+  const rawValue = selector.text ?? selector.value;
+  if (!rawValue) {
+    return null;
+  }
+
+  if (matchMode === 'regex') {
+    let regex;
+    try {
+      regex = new RegExp(rawValue, selector.flags || '');
+    } catch (err) {
+      throw new Error(`Invalid regex selector: ${err.message}`);
+    }
+
+    return waitForHandle(page, async () => {
+      const handle = await queryShadowByRegex(page, regex.source, regex.flags);
+      const element = handle.asElement();
+      if (element) {
+        return element;
+      }
+      await handle.dispose();
+      return null;
+    }, timeout);
+  }
+
+  const base = trimAndLimit(rawValue);
   if (!base) {
     return null;
   }
+
   const variants = buildTextVariants(base);
 
-  return waitForHandle(page, async () => {
+  const tryExact = async () => {
     for (const variant of variants) {
       const literal = xpathLiteral(variant);
       const lowerLiteral = xpathLiteral(variant.toLowerCase());
@@ -413,6 +506,31 @@ async function byText(page, value, timeout) {
     }
 
     for (const variant of variants) {
+      const attrExactHandle = await queryShadowByAttributes(
+        page,
+        variant,
+        ['placeholder', 'aria-label', 'title', 'data-label', 'data-name', 'data-value', 'data-target-selection-name'],
+        true
+      );
+      const attrExactElement = attrExactHandle.asElement();
+      if (attrExactElement) {
+        return attrExactElement;
+      }
+      await attrExactHandle.dispose();
+
+      const exactHandle = await queryShadowByText(page, variant, true);
+      const exactElement = exactHandle.asElement();
+      if (exactElement) {
+        return exactElement;
+      }
+      await exactHandle.dispose();
+    }
+
+    return null;
+  };
+
+  const tryContains = async () => {
+    for (const variant of variants) {
       const literal = xpathLiteral(variant);
       const lowerLiteral = xpathLiteral(variant.toLowerCase());
       const containsQueries = [
@@ -445,27 +563,6 @@ async function byText(page, value, timeout) {
     }
 
     for (const variant of variants) {
-      const attrExactHandle = await queryShadowByAttributes(
-        page,
-        variant,
-        ['placeholder', 'aria-label', 'title', 'data-label', 'data-name', 'data-value', 'data-target-selection-name'],
-        true
-      );
-      const attrExactElement = attrExactHandle.asElement();
-      if (attrExactElement) {
-        return attrExactElement;
-      }
-      await attrExactHandle.dispose();
-
-      const exactHandle = await queryShadowByText(page, variant, true);
-      const exactElement = exactHandle.asElement();
-      if (exactElement) {
-        return exactElement;
-      }
-      await exactHandle.dispose();
-    }
-
-    for (const variant of variants) {
       const attrContainsHandle = await queryShadowByAttributes(
         page,
         variant,
@@ -484,6 +581,24 @@ async function byText(page, value, timeout) {
         return containsElement;
       }
       await containsHandle.dispose();
+    }
+
+    return null;
+  };
+
+  return waitForHandle(page, async () => {
+    if (matchMode !== 'contains') {
+      const exactHandle = await tryExact();
+      if (exactHandle) {
+        return exactHandle;
+      }
+    }
+
+    if (matchMode === 'contains' || matchMode === 'equals') {
+      const containsHandle = await tryContains();
+      if (containsHandle) {
+        return containsHandle;
+      }
     }
 
     return null;
@@ -667,7 +782,7 @@ async function resolveHandle(page, selector, options = {}) {
       handle = await byLabel(page, selector.text ?? selector.value, timeout);
       break;
     case 'text':
-      handle = await byText(page, selector.text ?? selector.value, timeout);
+      handle = await byText(page, selector, timeout);
       break;
     case 'css':
       handle = await byCss(page, selector.value, timeout);
@@ -683,10 +798,15 @@ async function resolveHandle(page, selector, options = {}) {
   }
 
   if (!handle) {
-    const descriptor =
-      selector.type === 'role'
-        ? `${selector.role || 'unknown'}:${selector.name || 'unknown'}`
-        : selector.text || selector.value || 'unknown';
+    let descriptor;
+    if (selector.type === 'role') {
+      descriptor = `${selector.role || 'unknown'}:${selector.name || 'unknown'}`;
+    } else if (selector.type === 'text') {
+      const qualifier = selector.match && selector.match !== 'equals' ? ` (${selector.match})` : '';
+      descriptor = `${selector.text || selector.value || 'unknown'}${qualifier}`;
+    } else {
+      descriptor = selector.text || selector.value || 'unknown';
+    }
     throw new Error(`Could not resolve selector (${selector.type}: ${descriptor}) within ${timeout}ms.`);
   }
 

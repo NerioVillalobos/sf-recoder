@@ -54,6 +54,50 @@ async function applyWait(page, waitFor) {
   await wait(page, duration);
 }
 
+async function waitForLexIdle(page, timeout = 10000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    let busy = false;
+    try {
+      busy = await page.evaluate(() => {
+        const selectors = ['.slds-spinner', '[data-aura-class="forceLoadingSpinner"]'];
+        const isVisible = element => {
+          if (!element) {
+            return false;
+          }
+          const style = window.getComputedStyle(element);
+          if (!style || style.visibility === 'hidden' || style.display === 'none') {
+            return false;
+          }
+          const rect = element.getBoundingClientRect();
+          return rect && rect.width > 0 && rect.height > 0;
+        };
+
+        return selectors.some(selector => {
+          const nodes = Array.from(document.querySelectorAll(selector));
+          return nodes.some(isVisible);
+        });
+      });
+    } catch (err) {
+      const message = err && err.message ? err.message : '';
+      const transient =
+        message.includes('Execution context was destroyed') ||
+        message.includes('Cannot find context with specified id') ||
+        message.includes('Target closed');
+      if (!transient) {
+        throw err;
+      }
+      busy = true;
+    }
+
+    if (!busy) {
+      return;
+    }
+
+    await wait(page, 250);
+  }
+}
+
 async function ensureClickable(page, handle) {
   const resultHandle = await handle.evaluateHandle(element => {
     const ACTIONABLE_SELECTOR = [
@@ -132,6 +176,29 @@ async function ensureClickable(page, handle) {
   return element;
 }
 
+function shouldWaitForLex(step) {
+  if (!step || !step.selector) {
+    return false;
+  }
+  const selector = step.selector;
+  if (selector.type === 'role') {
+    const role = String(selector.role || '').toLowerCase();
+    if (['menuitem', 'tab', 'link', 'option', 'button'].includes(role)) {
+      return true;
+    }
+  }
+  if ((selector.type === 'text' && selector.match !== 'regex') || selector.type === 'label') {
+    const text = String(selector.text || selector.value || '').toLowerCase();
+    if (!text) {
+      return false;
+    }
+    if (/\b(save|setup|settings)\b/.test(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function performClick(page, step, timeoutOverride) {
   const handle = await resolveHandle(page, step.selector, {
     timeout: timeoutOverride
@@ -142,21 +209,38 @@ async function performClick(page, step, timeoutOverride) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     }
   });
+  let clickCompleted = false;
   try {
-    await target.click({ delay: 50 });
-  } catch (err) {
     try {
-      await target.evaluate(el => {
-        if (el) {
-          el.click();
-        }
-      });
-      console.warn('Puppeteer click failed; used DOM click fallback.');
-    } catch (fallbackError) {
-      throw err;
+      await target.click({ delay: 50 });
+      clickCompleted = true;
+    } catch (err) {
+      try {
+        await target.evaluate(el => {
+          if (el) {
+            el.click();
+          }
+        });
+        console.warn('Puppeteer click failed; used DOM click fallback.');
+        clickCompleted = true;
+      } catch (fallbackError) {
+        throw err;
+      }
+    }
+
+    if (clickCompleted && shouldWaitForLex(step)) {
+      await waitForLexIdle(page);
+    }
+    if (clickCompleted) {
+      await applyWait(page, step.waitFor);
+    }
+  } finally {
+    try {
+      await target.dispose();
+    } catch (disposeErr) {
+      // ignore disposal issues
     }
   }
-  await applyWait(page, step.waitFor);
 }
 
 async function performType(page, step, timeoutOverride) {
@@ -221,33 +305,40 @@ async function captureDiagnostics(page, step, index, error) {
   if (step.selector && step.selector.type === 'text') {
     try {
       const textValue = step.selector.text ?? step.selector.value ?? '';
-      const variants = buildTextVariants(textValue);
-      console.error('Text variants considered:', variants.join(' | '));
-      const report = await debugTextMatches(page, textValue, 10);
-      if (report.matches.length === 0) {
-        console.error('No elements contained any of the variants.');
+      const matchMode = step.selector.match || 'equals';
+      if (matchMode === 'regex') {
+        console.error(
+          `Regex pattern used: /${textValue}/${step.selector.flags || ''}`
+        );
       } else {
-        console.error('Closest matches:');
-        report.matches.forEach((match, idx) => {
-          console.error(
-            `  [${idx + 1}] <${match.tag}> via ${match.match.kind} -> "${match.text}"`
-          );
-          if (match.dataTestId) {
-            console.error(`       data-testid: ${match.dataTestId}`);
-          }
-          if (match.ariaLabel) {
-            console.error(`       aria-label: ${match.ariaLabel}`);
-          }
-          if (match.placeholder) {
-            console.error(`       placeholder: ${match.placeholder}`);
-          }
-          if (match.role) {
-            console.error(`       role: ${match.role}`);
-          }
-          if (match.cssPath) {
-            console.error(`       css: ${match.cssPath}`);
-          }
-        });
+        const variants = buildTextVariants(textValue);
+        console.error('Text variants considered:', variants.join(' | '));
+        const report = await debugTextMatches(page, textValue, 10);
+        if (report.matches.length === 0) {
+          console.error('No elements contained any of the variants.');
+        } else {
+          console.error('Closest matches:');
+          report.matches.forEach((match, idx) => {
+            console.error(
+              `  [${idx + 1}] <${match.tag}> via ${match.match.kind} -> "${match.text}"`
+            );
+            if (match.dataTestId) {
+              console.error(`       data-testid: ${match.dataTestId}`);
+            }
+            if (match.ariaLabel) {
+              console.error(`       aria-label: ${match.ariaLabel}`);
+            }
+            if (match.placeholder) {
+              console.error(`       placeholder: ${match.placeholder}`);
+            }
+            if (match.role) {
+              console.error(`       role: ${match.role}`);
+            }
+            if (match.cssPath) {
+              console.error(`       css: ${match.cssPath}`);
+            }
+          });
+        }
       }
     } catch (diagErr) {
       console.error('Failed to analyze text matches:', diagErr.message);

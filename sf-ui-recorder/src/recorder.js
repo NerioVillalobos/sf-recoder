@@ -42,8 +42,12 @@ async function main() {
     if (selector.type === 'role') {
       return `role:${selector.role} name:${selector.name}`;
     }
-    if (selector.type === 'label' || selector.type === 'text') {
-      return `${selector.type}:${selector.text}`;
+    if (selector.type === 'text') {
+      const qualifier = selector.match && selector.match !== 'equals' ? ` (${selector.match})` : '';
+      return `text:${selector.text}${qualifier}`;
+    }
+    if (selector.type === 'label') {
+      return `label:${selector.text}`;
     }
     return `${selector.type}:${selector.value}`;
   };
@@ -95,7 +99,8 @@ async function main() {
       }
 
       const MAX_TEXT_LENGTH = 80;
-      const ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],button,a,[role="tab"],[role="link"],input,textarea,select';
+      const ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],[role="treeitem"],button,a,[role="tab"],[role="link"],input,textarea,select';
+      const MENU_CONTAINER_QUERY = '[role="menuitem"],[role="option"],[role="button"],[role="tab"],[role="link"],button,a';
       const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
       const limit = text => {
         const normalized = normalize(text);
@@ -267,6 +272,77 @@ async function main() {
         return null;
       }
 
+      function isIconLike(el) {
+        if (!(el instanceof Element)) {
+          return false;
+        }
+        const tag = el.tagName.toLowerCase();
+        if (
+          tag === 'svg' ||
+          tag === 'use' ||
+          tag === 'path' ||
+          tag === 'i' ||
+          tag === 'lightning-icon' ||
+          tag === 'c-icon' ||
+          tag === 'lightning-primitive-icon' ||
+          tag === 'lightning-button-icon'
+        ) {
+          return true;
+        }
+        if (el.matches && el.matches('lightning-icon, c-icon, lightning-primitive-icon, lightning-button-icon, lightning-button-icon-stateful')) {
+          return true;
+        }
+        if (el.classList && Array.from(el.classList).some(cls => cls.startsWith('slds-icon'))) {
+          return true;
+        }
+        return false;
+      }
+
+      function isTinyClickTarget(target) {
+        if (!(target instanceof Element)) {
+          return false;
+        }
+        const text = limit(target.innerText || target.textContent);
+        if (text === '+') {
+          return true;
+        }
+        if (text && text.length <= 2) {
+          return true;
+        }
+        return isIconLike(target);
+      }
+
+      function findMenuContainer(path, fallback) {
+        const items = Array.isArray(path) ? path : [];
+        for (const node of items) {
+          if (!(node instanceof Element)) {
+            continue;
+          }
+          const container = climbFor(node, el => {
+            if (!(el instanceof Element) || !el.matches) {
+              return false;
+            }
+            if (!el.matches(MENU_CONTAINER_QUERY)) {
+              return false;
+            }
+            const name = accessibleName(el);
+            return !!(name && name.length > 2);
+          });
+          if (container) {
+            return container;
+          }
+        }
+
+        if (fallback && fallback.matches && fallback.matches(MENU_CONTAINER_QUERY)) {
+          const fallbackName = accessibleName(fallback);
+          if (fallbackName && fallbackName.length > 2) {
+            return fallback;
+          }
+        }
+
+        return null;
+      }
+
       function findActionable(path) {
         const items = Array.isArray(path) ? path : [];
         for (const node of items) {
@@ -312,6 +388,23 @@ async function main() {
         const element = findActionable(path) || (target instanceof Element ? target : null);
         if (!element) {
           return null;
+        }
+
+        if (target && isTinyClickTarget(target)) {
+          const container = findMenuContainer(path, element);
+          if (container) {
+            const name = accessibleName(container);
+            if (name) {
+              let role = (container.getAttribute('role') || '').trim().toLowerCase();
+              if (!role && container.matches && container.matches('button')) {
+                role = 'button';
+              }
+              if (role) {
+                return { type: 'role', role, name };
+              }
+              return { type: 'text', text: name };
+            }
+          }
         }
 
         const dataTestId = element.getAttribute('data-testid') || (element.dataset && element.dataset.testid);
