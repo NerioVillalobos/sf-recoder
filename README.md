@@ -27,6 +27,13 @@ admin page with:
 node src/recorder.js --org <alias> --out steps/mi-flujo.json --ret /lightning/n/FSL_Field_Service_Settings
 ```
 
+### Recording tips
+
+- Ignore App Launcher noise: clicks on the waffle button or the "Search apps and items" input are intentionally skipped. Land directly on the target page with `start.retURL` instead of relying on the App Launcher flow.
+- When a click hits a small `+` expander in the left nav, the recorder walks up to the parent item and captures the section label (for example `{ "type": "text", "text": "Optimization" }`).
+- Lightning status summaries such as `"4 statuses selected"` are rewritten to a contextual XPath pointing at the combobox button inside the correct card/field (for example the Resource Schedule Optimization → Pin Criteria selector shown below).
+- Prefer stable tabs or clearly labelled buttons. The recorder falls back to XPath only when it cannot find a role, label, or short visible text.
+
 ## Replaying a flow
 
 ```bash
@@ -41,7 +48,30 @@ The runner executes headlessly by default. Pass `--headful` if you want to obser
 - Step files are stored under `steps/`; this directory is ignored by Git except for the provided example.
 - Additional documentation and schema details live in `sf-ui-recorder/README.md`.
 - Text selectors support `match: "equals" | "contains" | "regex"` to address Lightning labels that vary between orgs.
-- The recorder automatically trims App Launcher noise and, when you pick **Field Service Settings**, persists `start.retURL: /lightning/n/FSL_Field_Service_Settings` so replays land directly on the admin page.
-- Lightning combobox summaries such as "4 statuses selected" are captured as contextual XPath selectors tied to their card/field labels for more reliable playback.
-- The runner waits for Lightning spinners/backdrops (`.slds-spinner`, `forceLoadingSpinner`, modal overlays) to disappear after navigation clicks such as menu items or Save buttons.
+- Navigation clicks scroll into view, retry with a DOM `click()` if Puppeteer complains, and wait for the page to reach a network-idle state before the next step.
+- Failures always emit a `debug-step-<n>.png` screenshot; add `--debug` to capture extra selector diagnostics.
 - The recorder and runner launch browsers at 1600×900 so Lightning stays in its desktop layout.
+
+## Sample: Field Service Settings update
+
+```json
+{
+  "version": 1,
+  "start": { "retURL": "/lightning/n/FSL_Field_Service_Settings" },
+  "steps": [
+    { "action": "wait", "waitFor": { "type": "networkidle" } },
+    { "action": "click", "selector": { "type": "text", "text": "Optimization" }, "waitFor": { "type": "short" } },
+    { "action": "click", "selector": { "type": "text", "text": "Logic" }, "waitFor": { "type": "networkidle" } },
+    {
+      "action": "click",
+      "selector": {
+        "type": "xpath",
+        "value": "//*[normalize-space()='Resource Schedule Optimization' or normalize-space()='Optimización de la programación de recursos']/ancestor::*[contains(@class,'slds-card') or contains(@class,'slds-section')][1]//*[normalize-space()='Pin Criteria' or normalize-space()='Criterios de fijación']/ancestor::*[self::div or self::label][1]//button[contains(@aria-haspopup,'listbox') or @role='combobox' or contains(normalize-space(.),'statuses selected')]"
+      },
+      "waitFor": { "type": "short" }
+    },
+    { "action": "click", "selector": { "type": "text", "text": "Mal Dirección TECO" }, "waitFor": { "type": "short" } },
+    { "action": "click", "selector": { "type": "text", "text": "Save" }, "waitFor": { "type": "networkidle" } }
+  ]
+}
+```

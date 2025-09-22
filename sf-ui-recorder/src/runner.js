@@ -54,62 +54,15 @@ async function applyWait(page, waitFor) {
   await wait(page, duration);
 }
 
-async function waitForLexIdle(page, { timeout = 30000 } = {}) {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    let busy = false;
-    try {
-      busy = await page.evaluate(() => {
-        const selectors = [
-          '.slds-spinner',
-          '[data-aura-class="forceLoadingSpinner"]',
-          'lightning-spinner',
-          '.slds-backdrop_open',
-          '.uiModal--visible',
-          '.modal-container.slds-modal__container'
-        ];
-        const isVisible = element => {
-          if (!element) {
-            return false;
-          }
-          const style = window.getComputedStyle(element);
-          if (!style || style.visibility === 'hidden' || style.display === 'none') {
-            return false;
-          }
-          const opacity = Number(style.opacity);
-          if (!Number.isNaN(opacity) && opacity === 0) {
-            return false;
-          }
-          const rect = element.getBoundingClientRect();
-          return rect && rect.width > 0 && rect.height > 0;
-        };
-
-        return selectors.some(selector => {
-          const nodes = Array.from(document.querySelectorAll(selector));
-          return nodes.some(isVisible);
-        });
-      });
-    } catch (err) {
-      const message = err && err.message ? err.message : '';
-      const transient =
-        message.includes('Execution context was destroyed') ||
-        message.includes('Cannot find context with specified id') ||
-        message.includes('Target closed');
-      if (!transient) {
-        throw err;
-      }
-      busy = true;
-    }
-
-    if (!busy) {
-      await wait(page, 300);
-      return;
-    }
-
-    await wait(page, 250);
+async function waitForNetworkIdle(page, timeout = 15000) {
+  if (!page || typeof page.waitForNetworkIdle !== 'function') {
+    return;
   }
-
-  console.warn(`waitForLexIdle timed out after ${timeout}ms.`);
+  try {
+    await page.waitForNetworkIdle({ idleTime: 500, timeout });
+  } catch (err) {
+    // Allow execution to continue when Lightning keeps the network busy.
+  }
 }
 
 async function ensureClickable(page, handle) {
@@ -190,7 +143,7 @@ async function ensureClickable(page, handle) {
   return element;
 }
 
-function shouldWaitForLex(step) {
+function shouldWaitForNetworkIdle(step) {
   if (!step) {
     return false;
   }
@@ -280,14 +233,8 @@ async function performClick(page, step, timeoutOverride, debugMode) {
       console.warn('Puppeteer click fallback succeeded via DOM click + retry.');
     }
 
-    if (clickCompleted && shouldWaitForLex(step)) {
-      try {
-        await waitForLexIdle(page);
-      } catch (idleErr) {
-        if (debugMode) {
-          console.warn('waitForLexIdle encountered an error:', idleErr.message);
-        }
-      }
+    if (clickCompleted && shouldWaitForNetworkIdle(step)) {
+      await waitForNetworkIdle(page);
     }
 
     if (clickCompleted) {

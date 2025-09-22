@@ -3,51 +3,63 @@
   "title": "Recorded Steps",
   "oneOf": [
     {
+      "$ref": "#/definitions/plan"
+    },
+    {
+      "$ref": "#/definitions/stepArray"
+    }
+  ],
+  "definitions": {
+    "plan": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "version": {
           "type": "number"
         },
         "meta": {
-          "type": "object",
-          "additionalProperties": true
+          "type": "object"
         },
         "start": {
-          "type": "object",
-          "properties": {
-            "retURL": {
-              "type": "string"
-            }
-          },
-          "additionalProperties": false
+          "$ref": "#/definitions/start"
         },
         "steps": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/Step"
-          }
+          "$ref": "#/definitions/stepArray"
         }
       },
-      "required": ["steps"],
-      "additionalProperties": false
+      "required": [
+        "steps"
+      ]
     },
-    {
+    "start": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "retURL": {
+          "type": "string"
+        }
+      }
+    },
+    "stepArray": {
       "type": "array",
       "items": {
-        "$ref": "#/definitions/Step"
+        "$ref": "#/definitions/step"
       }
-    }
-  ],
-  "definitions": {
-    "Step": {
+    },
+    "step": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "action": {
           "type": "string",
-          "enum": ["click", "type", "wait"]
+          "enum": [
+            "click",
+            "type",
+            "wait"
+          ]
         },
         "selector": {
-          "$ref": "#/definitions/Selector"
+          "$ref": "#/definitions/selector"
         },
         "value": {
           "type": "string"
@@ -56,7 +68,7 @@
           "type": "number"
         },
         "waitFor": {
-          "$ref": "#/definitions/WaitFor"
+          "$ref": "#/definitions/waitFor"
         },
         "ms": {
           "type": "number"
@@ -65,19 +77,22 @@
           "type": "number"
         }
       },
-      "required": ["action"],
-      "additionalProperties": false,
+      "required": [
+        "action"
+      ],
       "allOf": [
         {
           "if": {
             "properties": {
               "action": {
-                "enum": ["click", "type"]
+                "const": "click"
               }
             }
           },
           "then": {
-            "required": ["selector"]
+            "required": [
+              "selector"
+            ]
           }
         },
         {
@@ -89,28 +104,53 @@
             }
           },
           "then": {
-            "required": ["value"]
+            "required": [
+              "selector",
+              "value"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "wait"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "waitFor"
+            ]
           }
         }
       ]
     },
-    "WaitFor": {
+    "waitFor": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["networkidle", "short", "dom"]
+          "enum": [
+            "networkidle",
+            "short",
+            "dom"
+          ]
         },
         "selector": {
-          "$ref": "#/definitions/Selector"
+          "$ref": "#/definitions/selector"
+        },
+        "ms": {
+          "type": "number"
         }
-      },
-      "additionalProperties": false
+      }
     },
-    "Selector": {
+    "selector": {
       "oneOf": [
         {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "type": {
               "const": "dataTestId"
@@ -119,11 +159,14 @@
               "type": "string"
             }
           },
-          "required": ["type", "value"],
-          "additionalProperties": false
+          "required": [
+            "type",
+            "value"
+          ]
         },
         {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "type": {
               "const": "css"
@@ -132,11 +175,14 @@
               "type": "string"
             }
           },
-          "required": ["type", "value"],
-          "additionalProperties": false
+          "required": [
+            "type",
+            "value"
+          ]
         },
         {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "type": {
               "const": "xpath"
@@ -145,11 +191,14 @@
               "type": "string"
             }
           },
-          "required": ["type", "value"],
-          "additionalProperties": false
+          "required": [
+            "type",
+            "value"
+          ]
         },
         {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "type": {
               "const": "text"
@@ -159,15 +208,21 @@
             },
             "match": {
               "type": "string",
-              "enum": ["equals", "contains", "regex"],
-              "default": "equals"
+              "enum": [
+                "equals",
+                "contains",
+                "regex"
+              ]
             }
           },
-          "required": ["type", "text"],
-          "additionalProperties": false
+          "required": [
+            "type",
+            "text"
+          ]
         },
         {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "type": {
               "const": "label"
@@ -176,11 +231,14 @@
               "type": "string"
             }
           },
-          "required": ["type", "text"],
-          "additionalProperties": false
+          "required": [
+            "type",
+            "text"
+          ]
         },
         {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "type": {
               "const": "role"
@@ -192,8 +250,11 @@
               "type": "string"
             }
           },
-          "required": ["type", "role", "name"],
-          "additionalProperties": false
+          "required": [
+            "type",
+            "role",
+            "name"
+          ]
         }
       ]
     }

@@ -672,13 +672,6 @@ async function main() {
               if (typeof window.sfRecorderLog === 'function') {
                 window.sfRecorderLog(`Recorded nav section: ${name}`);
               }
-              let role = (container.getAttribute('role') || '').trim().toLowerCase();
-              if (!role && container.matches && container.matches('button')) {
-                role = 'button';
-              }
-              if (role) {
-                return { type: 'role', role, name };
-              }
               return { type: 'text', text: name };
             }
           }
