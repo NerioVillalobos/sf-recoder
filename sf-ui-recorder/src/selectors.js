@@ -202,13 +202,13 @@ async function queryShadowByAttributes(page, value, attributes, exact) {
   );
 }
 
-async function queryShadowByRegex(page, source, flags) {
+async function queryShadowByRegex(page, source) {
   return page.evaluateHandle(
-    ({ pattern, patternFlags }) => {
+    pattern => {
       const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
       let regex;
       try {
-        regex = new RegExp(pattern, patternFlags);
+        regex = new RegExp(pattern);
       } catch (err) {
         return null;
       }
@@ -262,7 +262,7 @@ async function queryShadowByRegex(page, source, flags) {
 
       return null;
     },
-    { pattern: source, patternFlags: flags }
+    source
   );
 }
 
@@ -449,13 +449,13 @@ async function byText(page, selector, timeout) {
   if (matchMode === 'regex') {
     let regex;
     try {
-      regex = new RegExp(rawValue, selector.flags || '');
+      regex = new RegExp(rawValue);
     } catch (err) {
       throw new Error(`Invalid regex selector: ${err.message}`);
     }
 
     return waitForHandle(page, async () => {
-      const handle = await queryShadowByRegex(page, regex.source, regex.flags);
+      const handle = await queryShadowByRegex(page, regex.source);
       const element = handle.asElement();
       if (element) {
         return element;
@@ -693,68 +693,106 @@ async function byRole(page, role, name, timeout) {
         return '';
       }
 
-      function pushChildren(queue, node) {
-        if (!node) {
-          return;
+      const MENU_CONTAINER_SELECTORS = [
+        '[role="menuitem"]',
+        '[role="option"]',
+        '[role="tab"]',
+        '[role="link"]',
+        '[role="button"]',
+        'li',
+        '.slds-context-bar__item',
+        '.slds-vertical-tabs__nav-item',
+        '.slds-accordion__list-item',
+        '.slds-tree__item',
+        '.slds-dropdown__item',
+        '.slds-listbox__item',
+        '.slds-listbox__option'
+      ].join(',');
+
+      function siblingLabel(el) {
+        if (!(el instanceof Element)) {
+          return '';
         }
-        if (node instanceof Element) {
-          queue.push(...Array.from(node.children));
-          if (node.shadowRoot) {
-            queue.push(node.shadowRoot);
-            const slots = node.shadowRoot.querySelectorAll ? Array.from(node.shadowRoot.querySelectorAll('slot')) : [];
-            for (const slot of slots) {
-              const assigned = slot.assignedElements ? slot.assignedElements() : [];
-              queue.push(...assigned);
+        const container = el.closest(MENU_CONTAINER_SELECTORS);
+        if (!container || container === el) {
+          return '';
+        }
+        const text = limit(container.innerText || container.textContent);
+        if (!text) {
+          return '';
+        }
+        return text;
+      }
+
+      function queryAllDeep(root) {
+        const results = [];
+        const visited = new Set();
+        const queue = [];
+        if (root) {
+          queue.push(root);
+        }
+
+        while (queue.length) {
+          const node = queue.shift();
+          if (!node || visited.has(node)) {
+            continue;
+          }
+          visited.add(node);
+
+          if (node instanceof Element) {
+            results.push(node);
+            queue.push(...Array.from(node.children || []));
+            if (node.shadowRoot) {
+              queue.push(node.shadowRoot);
             }
+          } else if (node instanceof ShadowRoot || node instanceof DocumentFragment || node instanceof Document) {
+            queue.push(...Array.from(node.childNodes || []));
           }
-          if (node.tagName === 'SLOT') {
-            const assigned = node.assignedElements ? node.assignedElements() : [];
-            queue.push(...assigned);
+
+          if (node instanceof HTMLSlotElement && typeof node.assignedElements === 'function') {
+            queue.push(...node.assignedElements());
           }
-        } else if (node instanceof ShadowRoot || node instanceof DocumentFragment || node instanceof Document) {
-          queue.push(...Array.from(node.children || []));
         }
+
+        return results;
       }
 
-      const queue = [];
-      const matches = [];
-      const seen = new Set();
-
-      if (document) {
-        queue.push(document);
-      }
-
-      while (queue.length) {
-        const node = queue.shift();
-        if (!node || seen.has(node)) {
-          continue;
-        }
-        seen.add(node);
-
-        if (node instanceof Element) {
+      function findByRoleName(root, role, name) {
+        const matches = [];
+        const nodes = queryAllDeep(root);
+        for (const node of nodes) {
+          if (!(node instanceof Element)) {
+            continue;
+          }
           const roleValue = (node.getAttribute('role') || '').trim().toLowerCase();
-          if (roleValue === targetRole) {
-            const name = accessibleName(node);
-            if (name === targetName) {
-              const rect = node.getBoundingClientRect();
-              const area = Math.max(rect.width, 0) * Math.max(rect.height, 0) || Number.POSITIVE_INFINITY;
-              matches.push({ node, area });
+          if (roleValue !== role) {
+            continue;
+          }
+
+          let resolvedName = accessibleName(node);
+          if (!resolvedName) {
+            const fallback = siblingLabel(node);
+            if (fallback) {
+              resolvedName = fallback;
             }
+          }
+
+          if (resolvedName === name) {
+            const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { width: 0, height: 0 };
+            const area = Math.max(rect.width, 0) * Math.max(rect.height, 0) || Number.POSITIVE_INFINITY;
+            matches.push({ node, area });
           }
         }
 
-        pushChildren(queue, node instanceof Element ? node : null);
-        if (node instanceof ShadowRoot || node instanceof DocumentFragment || node instanceof Document) {
-          pushChildren(queue, node);
+        if (!matches.length) {
+          return null;
         }
+
+        matches.sort((a, b) => a.area - b.area);
+        return matches[0].node;
       }
 
-      if (!matches.length) {
-        return null;
-      }
-
-      matches.sort((a, b) => a.area - b.area);
-      return matches[0].node;
+      return findByRoleName(document, targetRole, targetName);
     }, desiredRole, desiredName, MAX_TEXT_LENGTH);
 
     const element = handle.asElement();

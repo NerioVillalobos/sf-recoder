@@ -99,7 +99,8 @@ async function main() {
       }
 
       const MAX_TEXT_LENGTH = 80;
-      const ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],[role="treeitem"],button,a,[role="tab"],[role="link"],input,textarea,select';
+      const PRIMARY_ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],button,a,[role="tab"],[role="link"],input,textarea,select';
+      const CLOSEST_ACTIONABLE_QUERY = `${PRIMARY_ACTIONABLE_QUERY},[data-testid],[title],[aria-label]`;
       const MENU_CONTAINER_QUERY = '[role="menuitem"],[role="option"],[role="button"],[role="tab"],[role="link"],button,a';
       const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
       const limit = text => {
@@ -272,6 +273,25 @@ async function main() {
         return null;
       }
 
+      function closestActionable(node) {
+        let current = node;
+        while (current) {
+          if (current instanceof Element) {
+            if (typeof current.closest === 'function') {
+              const found = current.closest(CLOSEST_ACTIONABLE_QUERY);
+              if (found) {
+                return found;
+              }
+            }
+            if (current.matches && current.matches(CLOSEST_ACTIONABLE_QUERY)) {
+              return current;
+            }
+          }
+          current = nextCandidate(current);
+        }
+        return null;
+      }
+
       function isIconLike(el) {
         if (!(el instanceof Element)) {
           return false;
@@ -345,43 +365,34 @@ async function main() {
 
       function findActionable(path) {
         const items = Array.isArray(path) ? path : [];
-        for (const node of items) {
-          if (!(node instanceof Element)) {
-            continue;
-          }
-          const actionable = climbFor(node, el => el.matches(ACTIONABLE_QUERY));
-          if (actionable) {
-            return actionable;
+        const elements = items.filter(node => node instanceof Element);
+
+        for (const element of elements) {
+          const candidate = closestActionable(element);
+          if (candidate && candidate.matches && candidate.matches(PRIMARY_ACTIONABLE_QUERY)) {
+            return candidate;
           }
         }
 
-        for (const node of items) {
-          if (!(node instanceof Element)) {
-            continue;
-          }
-          const dataCandidate = climbFor(node, el => el.hasAttribute('data-testid') || (el.dataset && el.dataset.testid));
-          if (dataCandidate) {
-            return dataCandidate;
+        for (const element of elements) {
+          const candidate = closestActionable(element);
+          if (candidate && candidate.hasAttribute && candidate.hasAttribute('data-testid')) {
+            return candidate;
           }
         }
 
-        for (const node of items) {
-          if (!(node instanceof Element)) {
-            continue;
-          }
-          const labelled = climbFor(node, el => el.hasAttribute('title') || el.hasAttribute('aria-label'));
-          if (labelled) {
-            return labelled;
-          }
-        }
-
-        for (const node of items) {
-          if (node instanceof Element) {
-            return node;
+        for (const element of elements) {
+          const candidate = closestActionable(element);
+          if (
+            candidate &&
+            candidate.hasAttribute &&
+            (candidate.hasAttribute('title') || candidate.hasAttribute('aria-label'))
+          ) {
+            return candidate;
           }
         }
 
-        return null;
+        return elements.length ? elements[0] : null;
       }
 
       function buildSelector(target, path) {

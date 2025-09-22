@@ -33,16 +33,16 @@ async function wait(page, ms) {
 
 function waitDuration(waitFor) {
   if (!waitFor) {
-    return 200;
+    return 300;
   }
   if (typeof waitFor.ms === 'number') {
     return waitFor.ms;
   }
   switch (waitFor.type) {
-    case 'long':
-      return 3000;
-    case 'medium':
-      return 1500;
+    case 'networkidle':
+      return 2000;
+    case 'dom':
+      return 800;
     case 'short':
     default:
       return 500;
@@ -54,19 +54,30 @@ async function applyWait(page, waitFor) {
   await wait(page, duration);
 }
 
-async function waitForLexIdle(page, timeout = 10000) {
+async function waitForLexIdle(page, { timeout = 30000 } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     let busy = false;
     try {
       busy = await page.evaluate(() => {
-        const selectors = ['.slds-spinner', '[data-aura-class="forceLoadingSpinner"]'];
+        const selectors = [
+          '.slds-spinner',
+          '[data-aura-class="forceLoadingSpinner"]',
+          'lightning-spinner',
+          '.slds-backdrop_open',
+          '.uiModal--visible',
+          '.modal-container.slds-modal__container'
+        ];
         const isVisible = element => {
           if (!element) {
             return false;
           }
           const style = window.getComputedStyle(element);
           if (!style || style.visibility === 'hidden' || style.display === 'none') {
+            return false;
+          }
+          const opacity = Number(style.opacity);
+          if (!Number.isNaN(opacity) && opacity === 0) {
             return false;
           }
           const rect = element.getBoundingClientRect();
@@ -91,11 +102,14 @@ async function waitForLexIdle(page, timeout = 10000) {
     }
 
     if (!busy) {
+      await wait(page, 300);
       return;
     }
 
     await wait(page, 250);
   }
+
+  console.warn(`waitForLexIdle timed out after ${timeout}ms.`);
 }
 
 async function ensureClickable(page, handle) {
@@ -177,17 +191,34 @@ async function ensureClickable(page, handle) {
 }
 
 function shouldWaitForLex(step) {
-  if (!step || !step.selector) {
+  if (!step) {
+    return false;
+  }
+
+  if (step.waitFor && step.waitFor.type === 'networkidle') {
+    return true;
+  }
+
+  if (!step.selector) {
     return false;
   }
   const selector = step.selector;
   if (selector.type === 'role') {
     const role = String(selector.role || '').toLowerCase();
-    if (['menuitem', 'tab', 'link', 'option', 'button'].includes(role)) {
+    const name = String(selector.name || '').toLowerCase();
+    if (['menuitem', 'tab', 'link', 'option'].includes(role)) {
       return true;
     }
+    if (role === 'button' && name) {
+      if (/\b(save|setup|settings)\b/.test(name)) {
+        return true;
+      }
+      if (/\b(field service settings|optimization|optimización|logic|lógica)\b/.test(name)) {
+        return true;
+      }
+    }
   }
-  if ((selector.type === 'text' && selector.match !== 'regex') || selector.type === 'label') {
+  if (selector.type === 'text' || selector.type === 'label') {
     const text = String(selector.text || selector.value || '').toLowerCase();
     if (!text) {
       return false;
@@ -195,42 +226,66 @@ function shouldWaitForLex(step) {
     if (/\b(save|setup|settings)\b/.test(text)) {
       return true;
     }
+    if (/\b(field service settings|optimization|optimización|logic|lógica)\b/.test(text)) {
+      return true;
+    }
   }
   return false;
 }
 
-async function performClick(page, step, timeoutOverride) {
+async function performClick(page, step, timeoutOverride, debugMode) {
   const handle = await resolveHandle(page, step.selector, {
     timeout: timeoutOverride
   });
   const target = await ensureClickable(page, handle);
   await target.evaluate(el => {
-    if (el.scrollIntoView) {
+    if (el && el.scrollIntoView) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     }
   });
+
   let clickCompleted = false;
+  let fallbackUsed = false;
+  let primaryError;
+
   try {
     try {
-      await target.click({ delay: 50 });
+      await target.click({ delay: 10 });
       clickCompleted = true;
     } catch (err) {
+      primaryError = err;
       try {
         await target.evaluate(el => {
           if (el) {
             el.click();
           }
         });
-        console.warn('Puppeteer click failed; used DOM click fallback.');
+        fallbackUsed = true;
+        await wait(page, 150);
+        await target.click({ delay: 10 });
         clickCompleted = true;
-      } catch (fallbackError) {
-        throw err;
+      } catch (retryError) {
+        if (debugMode) {
+          console.warn('DOM click fallback retry failed:', retryError.message);
+        }
+        throw primaryError;
       }
     }
 
-    if (clickCompleted && shouldWaitForLex(step)) {
-      await waitForLexIdle(page);
+    if (fallbackUsed && debugMode) {
+      console.warn('Puppeteer click fallback succeeded via DOM click + retry.');
     }
+
+    if (clickCompleted && shouldWaitForLex(step)) {
+      try {
+        await waitForLexIdle(page);
+      } catch (idleErr) {
+        if (debugMode) {
+          console.warn('waitForLexIdle encountered an error:', idleErr.message);
+        }
+      }
+    }
+
     if (clickCompleted) {
       await applyWait(page, step.waitFor);
     }
@@ -297,20 +352,20 @@ async function performWait(page, step) {
   await applyWait(page, step.waitFor);
 }
 
-async function captureDiagnostics(page, step, index, error) {
+async function captureDiagnostics(page, step, index, error, debugMode) {
   console.error('--- Debug diagnostics ---');
   console.error(`Step ${index + 1} selector:`, step.selector);
   console.error('Error:', error && error.message ? error.message : error);
 
   if (step.selector && step.selector.type === 'text') {
-    try {
-      const textValue = step.selector.text ?? step.selector.value ?? '';
-      const matchMode = step.selector.match || 'equals';
-      if (matchMode === 'regex') {
-        console.error(
-          `Regex pattern used: /${textValue}/${step.selector.flags || ''}`
-        );
-      } else {
+    const textValue = step.selector.text ?? step.selector.value ?? '';
+    const matchMode = step.selector.match || 'equals';
+    if (matchMode === 'regex') {
+      console.error(`Regex pattern used: /${textValue}/`);
+    }
+
+    if (debugMode) {
+      try {
         const variants = buildTextVariants(textValue);
         console.error('Text variants considered:', variants.join(' | '));
         const report = await debugTextMatches(page, textValue, 10);
@@ -339,10 +394,14 @@ async function captureDiagnostics(page, step, index, error) {
             }
           });
         }
+      } catch (diagErr) {
+        console.error('Failed to analyze text matches:', diagErr.message);
       }
-    } catch (diagErr) {
-      console.error('Failed to analyze text matches:', diagErr.message);
+    } else {
+      console.error('Re-run with --debug to inspect text variants.');
     }
+  } else if (!debugMode) {
+    console.error('Re-run with --debug for additional diagnostics.');
   }
 
   const screenshotPath = path.resolve(`debug-step-${index + 1}.png`);
@@ -359,16 +418,16 @@ async function captureDiagnostics(page, step, index, error) {
 async function main() {
   const argv = minimist(process.argv.slice(2), {
     string: ['org', 'steps', 'ret', 'timeout'],
-    boolean: ['headful', 'debug'],
-    alias: { org: 'o', steps: 's', ret: 'r', headful: 'H', timeout: 't', debug: 'd' }
+    boolean: ['headful', 'debug', 'no-validate'],
+    alias: { org: 'o', steps: 's', ret: 'r', headful: 'H', timeout: 't', debug: 'd', 'no-validate': 'n' }
   });
 
   const orgAlias = argv.org;
   const stepsPath = argv.steps;
-  const retURL = argv.ret || DEFAULT_RET_URL;
   const headless = !argv.headful;
   const selectorTimeout = argv.timeout !== undefined ? Number(argv.timeout) : undefined;
   const debugMode = Boolean(argv.debug);
+  const skipValidation = Boolean(argv['no-validate']);
 
   if (Number.isNaN(selectorTimeout)) {
     console.error('Invalid --timeout value. Expected a number of milliseconds.');
@@ -376,29 +435,34 @@ async function main() {
   }
 
   if (!orgAlias || !stepsPath) {
-    console.error('Usage: node src/runner.js --org <alias> --steps <file> [--ret <retURL>] [--headful]');
+    console.error('Usage: node src/runner.js --org <alias> --steps <file> [--ret <retURL>] [--headful] [--no-validate]');
     process.exit(1);
   }
 
-  const schema = loadSchema();
   const plan = loadSteps(stepsPath);
-
-  const ajv = new Ajv({ allErrors: true, strict: false });
-  const validate = ajv.compile(schema);
-  let steps;
-  if (Array.isArray(plan)) {
-    steps = plan;
-  } else if (plan && Array.isArray(plan.steps)) {
-    steps = plan.steps;
-  } else {
-    console.error('Steps file must be an array or an object with a steps array.');
+  const isArrayRoot = Array.isArray(plan);
+  const steps = isArrayRoot ? plan : (plan && Array.isArray(plan.steps) ? plan.steps : null);
+  if (!steps) {
+    console.error('Invalid steps root: expected array or {steps:[]}.');
     process.exit(1);
   }
 
-  if (!validate(plan)) {
-    console.error('Steps file failed validation:', validate.errors);
-    process.exit(1);
+  if (!skipValidation) {
+    const schema = loadSchema();
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validate = ajv.compile(schema);
+    const rootToValidate = isArrayRoot ? plan : plan;
+    if (!validate(rootToValidate)) {
+      console.error('Steps file failed validation:', validate.errors);
+      process.exit(1);
+    }
   }
+
+  let retURL = argv.ret;
+  if (!retURL && !isArrayRoot && plan && plan.start && typeof plan.start.retURL === 'string') {
+    retURL = plan.start.retURL;
+  }
+  retURL = retURL || DEFAULT_RET_URL;
 
   const { instanceUrl, accessToken } = getOrgInfo(orgAlias);
   const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, retURL);
@@ -423,7 +487,7 @@ async function main() {
     try {
       switch (step.action) {
         case 'click':
-          await performClick(page, step, selectorTimeout);
+          await performClick(page, step, selectorTimeout, debugMode);
           break;
         case 'type':
           await performType(page, step, selectorTimeout);
@@ -436,9 +500,7 @@ async function main() {
       }
     } catch (err) {
       console.error(`Step ${index + 1} failed:`, err.message);
-      if (debugMode) {
-        await captureDiagnostics(page, step, index, err);
-      }
+      await captureDiagnostics(page, step, index, err, debugMode);
       break;
     }
   }
