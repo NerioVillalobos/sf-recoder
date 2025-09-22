@@ -41,5 +41,7 @@ The runner executes headlessly by default. Pass `--headful` if you want to obser
 - Step files are stored under `steps/`; this directory is ignored by Git except for the provided example.
 - Additional documentation and schema details live in `sf-ui-recorder/README.md`.
 - Text selectors support `match: "equals" | "contains" | "regex"` to address Lightning labels that vary between orgs.
+- The recorder automatically trims App Launcher noise and, when you pick **Field Service Settings**, persists `start.retURL: /lightning/n/FSL_Field_Service_Settings` so replays land directly on the admin page.
+- Lightning combobox summaries such as "4 statuses selected" are captured as contextual XPath selectors tied to their card/field labels for more reliable playback.
 - The runner waits for Lightning spinners/backdrops (`.slds-spinner`, `forceLoadingSpinner`, modal overlays) to disappear after navigation clicks such as menu items or Save buttons.
 - The recorder and runner launch browsers at 1600×900 so Lightning stays in its desktop layout.

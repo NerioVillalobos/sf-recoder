@@ -23,17 +23,33 @@ async function main() {
   const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, retURL);
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  let steps = [];
+  let planRoot = { version: 1, steps: [] };
   if (fs.existsSync(outputPath)) {
     try {
       const existing = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
       if (Array.isArray(existing)) {
-        steps = existing;
+        planRoot = { version: 1, steps: existing };
+      } else if (existing && typeof existing === 'object') {
+        planRoot = existing;
       }
     } catch (err) {
       console.warn(`Could not parse existing steps file. Starting fresh. (${err.message})`);
     }
   }
+
+  if (!planRoot || typeof planRoot !== 'object') {
+    planRoot = { version: 1, steps: [] };
+  }
+
+  if (!Array.isArray(planRoot.steps)) {
+    planRoot.steps = [];
+  }
+
+  if (planRoot.version === undefined) {
+    planRoot.version = 1;
+  }
+
+  const steps = planRoot.steps;
 
   const describeSelector = selector => {
     if (!selector) {
@@ -53,14 +69,41 @@ async function main() {
   };
 
   let writeChain = Promise.resolve();
+  const persistPlan = async () => {
+    await fs.promises.writeFile(outputPath, JSON.stringify(planRoot, null, 2));
+  };
+
   const saveStep = step => {
-    writeChain = writeChain.then(async () => {
-      steps.push(step);
-      await fs.promises.writeFile(outputPath, JSON.stringify(steps, null, 2));
-      console.log(`Recorded ${step.action} -> ${describeSelector(step.selector)}`);
-    }).catch(err => {
-      console.error('Failed to persist step:', err.message);
-    });
+    writeChain = writeChain
+      .then(async () => {
+        steps.push(step);
+        await persistPlan();
+        console.log(`Recorded ${step.action} -> ${describeSelector(step.selector)}`);
+      })
+      .catch(err => {
+        console.error('Failed to persist step:', err.message);
+      });
+  };
+
+  const updateStartRetURL = ret => {
+    if (!ret || typeof ret !== 'string') {
+      return;
+    }
+    if (!planRoot.start || typeof planRoot.start !== 'object') {
+      planRoot.start = {};
+    }
+    if (planRoot.start.retURL === ret) {
+      return;
+    }
+    planRoot.start.retURL = ret;
+    writeChain = writeChain
+      .then(async () => {
+        await persistPlan();
+        console.log(`Recorder start.retURL set to ${ret}`);
+      })
+      .catch(err => {
+        console.error('Failed to persist start.retURL:', err.message);
+      });
   };
 
   const viewport = { width: 1600, height: 900 };
@@ -81,6 +124,27 @@ async function main() {
     saveStep(step);
   });
 
+  await page.exposeFunction('sfRecorderLog', message => {
+    if (typeof message === 'string' && message.trim()) {
+      console.log(message.trim());
+    }
+  });
+
+  await page.exposeFunction('sfRecorderSetStart', ret => {
+    updateStartRetURL(ret);
+  });
+
+  page.on('console', msg => {
+    try {
+      const text = msg.text();
+      if (text) {
+        console.log(text);
+      }
+    } catch (err) {
+      // ignore console relay issues
+    }
+  });
+
   await page.evaluateOnNewDocument(() => {
     window.__sfRecorderReady = false;
 
@@ -99,6 +163,11 @@ async function main() {
       }
 
       const MAX_TEXT_LENGTH = 80;
+      const STATUS_SUMMARY_PATTERN = /^\d+\s+statuses selected$/i;
+      const FIELD_SERVICE_OPTION = /field service settings/i;
+      const FIELD_SERVICE_RETURL = '/lightning/n/FSL_Field_Service_Settings';
+      const APP_LAUNCHER_TEXT = /app launcher/i;
+      const APP_LAUNCHER_SEARCH = /search apps and items/i;
       const PRIMARY_ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],button,a,[role="tab"],[role="link"],input,textarea,select';
       const CLOSEST_ACTIONABLE_QUERY = `${PRIMARY_ACTIONABLE_QUERY},[data-testid],[title],[aria-label]`;
       const MENU_CONTAINER_QUERY = '[role="menuitem"],[role="option"],[role="button"],[role="tab"],[role="link"],button,a';
@@ -109,6 +178,14 @@ async function main() {
           return '';
         }
         return normalized.length > MAX_TEXT_LENGTH ? normalized.slice(0, MAX_TEXT_LENGTH).trim() : normalized;
+      };
+
+      const xpathLiteral = value => {
+        const safe = String(value);
+        if (!safe.includes("'")) {
+          return `'${safe}'`;
+        }
+        return `concat(${safe.split("'").map(part => `'${part}'`).join(", '\'', ")})`;
       };
 
       function nextCandidate(node) {
@@ -363,6 +440,192 @@ async function main() {
         return null;
       }
 
+      function isBlockContainer(el) {
+        if (!(el instanceof Element) || !el.classList) {
+          return false;
+        }
+        return Array.from(el.classList).some(cls => cls.includes('slds-card') || cls.includes('slds-section'));
+      }
+
+      function findBlockTitle(block) {
+        if (!(block instanceof Element)) {
+          return '';
+        }
+
+        const titleSelectors = [
+          '.slds-card__header-title',
+          '.slds-card__header-title span',
+          '.slds-section__title',
+          '.slds-section__title-action',
+          '.slds-text-heading_medium',
+          '.slds-text-heading_small',
+          '.slds-accordion__summary-heading',
+          'header h1',
+          'header h2',
+          'header h3',
+          'h1',
+          'h2',
+          'h3'
+        ];
+
+        for (const selector of titleSelectors) {
+          const candidate = block.querySelector(selector);
+          if (candidate) {
+            const text = limit(candidate.textContent);
+            if (text) {
+              return text;
+            }
+          }
+        }
+
+        const dataLabel = block.getAttribute('data-label');
+        if (dataLabel) {
+          const text = limit(dataLabel);
+          if (text) {
+            return text;
+          }
+        }
+
+        const ariaLabel = block.getAttribute('aria-label');
+        if (ariaLabel) {
+          const text = limit(ariaLabel);
+          if (text) {
+            return text;
+          }
+        }
+
+        const accessible = accessibleName(block);
+        if (accessible) {
+          return accessible;
+        }
+
+        return '';
+      }
+
+      function findFieldContainer(element, block) {
+        return climbFor(element, el => {
+          if (!(el instanceof Element)) {
+            return false;
+          }
+          if (block && el === block) {
+            return false;
+          }
+          if (el.hasAttribute && el.hasAttribute('data-field-label')) {
+            return true;
+          }
+          if (!el.classList) {
+            return false;
+          }
+          const classes = Array.from(el.classList);
+          return classes.some(cls =>
+            cls.startsWith('slds-form-element') ||
+            cls.includes('slds-form-element') ||
+            cls.includes('slds-form-element__control') ||
+            cls.includes('slds-form_compound') ||
+            cls.includes('slds-grid')
+          );
+        });
+      }
+
+      function findFieldLabel(element, block) {
+        const container = findFieldContainer(element, block);
+        const tried = new Set();
+
+        const pullText = node => {
+          if (!node || tried.has(node)) {
+            return '';
+          }
+          tried.add(node);
+          const text = limit(node.textContent || '');
+          if (text && !STATUS_SUMMARY_PATTERN.test(text)) {
+            return text;
+          }
+          return '';
+        };
+
+        if (container) {
+          if (container.hasAttribute && container.hasAttribute('data-field-label')) {
+            const text = limit(container.getAttribute('data-field-label'));
+            if (text) {
+              return text;
+            }
+          }
+
+          const labelSelectors = [
+            'label',
+            '.slds-form-element__label',
+            '.slds-form-element__title',
+            '.slds-form-element__legend',
+            '.slds-form-element__control label',
+            'legend'
+          ];
+
+          for (const selector of labelSelectors) {
+            const candidate = container.querySelector(selector);
+            const text = pullText(candidate);
+            if (text) {
+              return text;
+            }
+          }
+
+          const aria = container.getAttribute('aria-label');
+          if (aria) {
+            const text = limit(aria);
+            if (text) {
+              return text;
+            }
+          }
+        }
+
+        const explicitLabel = climbFor(element, el => el instanceof Element && el.tagName === 'LABEL');
+        if (explicitLabel) {
+          const text = pullText(explicitLabel);
+          if (text) {
+            return text;
+          }
+        }
+
+        const previous = element && element.previousElementSibling ? element.previousElementSibling : null;
+        if (previous) {
+          const text = pullText(previous);
+          if (text) {
+            return text;
+          }
+        }
+
+        if (container) {
+          const fallback = accessibleName(container);
+          if (fallback && !STATUS_SUMMARY_PATTERN.test(fallback)) {
+            return fallback;
+          }
+        }
+
+        return '';
+      }
+
+      function buildComboboxSelector(element) {
+        const block = climbFor(element, el => isBlockContainer(el));
+        if (!block) {
+          return null;
+        }
+
+        const blockTitle = findBlockTitle(block);
+        if (!blockTitle) {
+          return null;
+        }
+
+        const fieldLabel = findFieldLabel(element, block);
+        if (!fieldLabel) {
+          return null;
+        }
+
+        const blockLiteral = xpathLiteral(blockTitle);
+        const fieldLiteral = xpathLiteral(fieldLabel);
+        const xpath = `//*[normalize-space()=${blockLiteral}]/ancestor::*[contains(@class,'slds-card') or contains(@class,'slds-section')][1]//*[normalize-space()=${fieldLiteral}]/ancestor::*[self::div or self::label][1]//button[contains(@aria-haspopup,'listbox') or @role='combobox' or contains(normalize-space(.),'statuses selected')]`;
+
+        return { xpath, blockTitle, fieldLabel };
+      }
+
       function findActionable(path) {
         const items = Array.isArray(path) ? path : [];
         const elements = items.filter(node => node instanceof Element);
@@ -406,6 +669,9 @@ async function main() {
           if (container) {
             const name = accessibleName(container);
             if (name) {
+              if (typeof window.sfRecorderLog === 'function') {
+                window.sfRecorderLog(`Recorded nav section: ${name}`);
+              }
               let role = (container.getAttribute('role') || '').trim().toLowerCase();
               if (!role && container.matches && container.matches('button')) {
                 role = 'button';
@@ -418,6 +684,18 @@ async function main() {
           }
         }
 
+        const elementName = accessibleName(element);
+        const elementText = elementName || limit(element.innerText || element.textContent);
+        if (elementText && STATUS_SUMMARY_PATTERN.test(elementText)) {
+          const combobox = buildComboboxSelector(element);
+          if (combobox) {
+            if (typeof window.sfRecorderLog === 'function') {
+              window.sfRecorderLog(`Recorded combobox: ${combobox.blockTitle} > ${combobox.fieldLabel}`);
+            }
+            return { type: 'xpath', value: combobox.xpath };
+          }
+        }
+
         const dataTestId = element.getAttribute('data-testid') || (element.dataset && element.dataset.testid);
         if (dataTestId) {
           return { type: 'dataTestId', value: limit(dataTestId) };
@@ -426,7 +704,7 @@ async function main() {
         const role = (element.getAttribute('role') || '').trim().toLowerCase();
         const roleNames = new Set(['menuitem', 'option', 'button', 'tab', 'link']);
         if (role && roleNames.has(role)) {
-          const name = accessibleName(element);
+          const name = elementName;
           if (name) {
             return { type: 'role', role, name };
           }
@@ -439,9 +717,8 @@ async function main() {
           }
         }
 
-        const ariaName = accessibleName(element);
-        if (ariaName) {
-          return { type: 'text', text: ariaName };
+        if (elementName) {
+          return { type: 'text', text: elementName };
         }
 
         const xpath = absoluteXPath(element);
@@ -450,6 +727,60 @@ async function main() {
         }
 
         return null;
+      }
+
+      function shouldSkipAppLauncher(selector) {
+        if (!selector) {
+          return false;
+        }
+
+        if (selector.type === 'role') {
+          const roleName = String(selector.role || '').toLowerCase();
+          const name = String(selector.name || '');
+          if (roleName === 'button' && APP_LAUNCHER_TEXT.test(name)) {
+            return true;
+          }
+        }
+
+        if (selector.type === 'text') {
+          const text = String(selector.text || selector.value || '');
+          if (APP_LAUNCHER_TEXT.test(text) || APP_LAUNCHER_SEARCH.test(text)) {
+            return true;
+          }
+        }
+
+        if (selector.type === 'label') {
+          const text = String(selector.text || '');
+          if (APP_LAUNCHER_SEARCH.test(text)) {
+            return true;
+          }
+        }
+
+        return false;
+      }
+
+      function handleAppLauncherSelection(selector) {
+        if (!selector || selector.type !== 'role') {
+          return false;
+        }
+
+        const roleName = String(selector.role || '').toLowerCase();
+        if (!['option', 'menuitem'].includes(roleName)) {
+          return false;
+        }
+
+        const name = String(selector.name || '');
+        if (!FIELD_SERVICE_OPTION.test(name)) {
+          return false;
+        }
+
+        if (typeof window.sfRecorderLog === 'function') {
+          window.sfRecorderLog('Recorded App Launcher choice: Field Service Settings');
+        }
+        if (typeof window.sfRecorderSetStart === 'function') {
+          window.sfRecorderSetStart(FIELD_SERVICE_RETURL);
+        }
+        return false;
       }
 
       function recordClick(event) {
@@ -461,6 +792,10 @@ async function main() {
         if (!selector) {
           return;
         }
+        if (shouldSkipAppLauncher(selector)) {
+          return;
+        }
+        handleAppLauncherSelection(selector);
         window.sfRecordEvent({
           action: 'click',
           selector,
@@ -479,11 +814,15 @@ async function main() {
         if (!selector) {
           return;
         }
+        if (shouldSkipAppLauncher(selector)) {
+          return;
+        }
         const payload = {
           action: 'type',
           selector,
           value: target.value,
-          delay: 10
+          delay: 10,
+          timestamp: Date.now()
         };
         window.sfRecordEvent(payload);
       }

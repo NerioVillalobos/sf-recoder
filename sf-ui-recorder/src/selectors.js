@@ -848,7 +848,7 @@ async function resolveHandle(page, selector, options = {}) {
     throw new Error(`Could not resolve selector (${selector.type}: ${descriptor}) within ${timeout}ms.`);
   }
 
-  return handle;
+  return [handle];
 }
 
 module.exports = {

@@ -234,10 +234,14 @@ function shouldWaitForLex(step) {
 }
 
 async function performClick(page, step, timeoutOverride, debugMode) {
-  const handle = await resolveHandle(page, step.selector, {
+  const handles = await resolveHandle(page, step.selector, {
     timeout: timeoutOverride
   });
-  const target = await ensureClickable(page, handle);
+  const [primaryHandle, ...extraHandles] = handles;
+  if (!primaryHandle) {
+    throw new Error('Selector did not resolve to an element.');
+  }
+  const target = await ensureClickable(page, primaryHandle);
   await target.evaluate(el => {
     if (el && el.scrollIntoView) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
@@ -295,13 +299,27 @@ async function performClick(page, step, timeoutOverride, debugMode) {
     } catch (disposeErr) {
       // ignore disposal issues
     }
+    for (const extra of extraHandles) {
+      if (!extra) {
+        continue;
+      }
+      try {
+        await extra.dispose();
+      } catch (err) {
+        // ignore disposal issues
+      }
+    }
   }
 }
 
 async function performType(page, step, timeoutOverride) {
-  const handle = await resolveHandle(page, step.selector, {
+  const handles = await resolveHandle(page, step.selector, {
     timeout: timeoutOverride
   });
+  const [handle, ...extraHandles] = handles;
+  if (!handle) {
+    throw new Error('Selector did not resolve to an element.');
+  }
   const value = step.value || '';
   const delay = typeof step.delay === 'number' ? step.delay : 30;
 
@@ -346,6 +364,23 @@ async function performType(page, step, timeoutOverride) {
   });
 
   await applyWait(page, step.waitFor);
+
+  try {
+    await handle.dispose();
+  } catch (err) {
+    // ignore disposal issues
+  }
+
+  for (const extra of extraHandles) {
+    if (!extra) {
+      continue;
+    }
+    try {
+      await extra.dispose();
+    } catch (err) {
+      // ignore disposal issues
+    }
+  }
 }
 
 async function performWait(page, step) {
