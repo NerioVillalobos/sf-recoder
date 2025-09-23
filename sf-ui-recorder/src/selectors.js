@@ -854,6 +854,7 @@ async function resolveHandle(page, selector, options = {}) {
 module.exports = {
   resolveHandle,
   buildTextVariants,
+  normalizeText,
   async debugTextMatches(page, value, limit = 10) {
     const variants = buildTextVariants(value);
     return page.evaluate(

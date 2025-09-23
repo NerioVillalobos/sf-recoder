@@ -42,6 +42,52 @@ node src/runner.js --org <alias> --steps steps/mi-flujo.json
 
 The runner executes headlessly by default. Pass `--headful` if you want to observe execution, `--timeout 20000` (milliseconds) to extend selector resolution when Lightning loads slowly, and `--no-validate` to skip AJV validation for quick experiments. Failures always emit a `debug-step-<n>.png` screenshot; add `--debug` to capture additional selector diagnostics alongside the image.
 
+## Scan mode (UI map)
+
+Generate a JSON map of actionable UI controls on the current page without recording clicks:
+
+```bash
+node src/recorder.js --org <alias> --ret /lightning/page/home --scan --out maps/fsl-settings.map.json
+```
+
+The output lives under `maps/` by default and follows this shape:
+
+```json
+{
+  "url": "https://example.lightning.force.com/lightning/page/home",
+  "timestamp": "2024-01-01T12:00:00.000Z",
+  "frameCount": 2,
+  "frames": [
+    {
+      "frameUrl": "https://example.lightning.force.com/lightning/page/home",
+      "sameOrigin": true,
+      "elements": [
+        {
+          "role": "button",
+          "tag": "button",
+          "name": "Save",
+          "visible": true,
+          "region": "main",
+          "bbox": { "x": 1024, "y": 540, "width": 90, "height": 32 },
+          "candidates": {
+            "roleName": { "role": "button", "name": "Save" },
+            "text": "Save",
+            "xpath": "/html/body/div[1]/div/button[3]"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Notes:
+
+- Same-origin iframes (for example Visualforce) are scanned; cross-origin frames are listed with `sameOrigin: false` and an empty `elements` array.
+- Lightning shadow DOM (LWC) trees are traversed so controls rendered inside web components are included.
+- Locator candidates are suggestions (role/name, data-testid, label, text, CSS, XPath) meant to speed up authoring — review them before use.
+- Use the generated map to choose stable selectors for new steps or to inspect which regions of the page expose actionable elements.
+
 ## Notes
 
 - Ensure you have already authenticated the target alias with `sf login web` outside of this tool.
