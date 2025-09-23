@@ -81,6 +81,44 @@ async function snap(page, filePath) {
   }
 }
 
+async function snapArea(page, handle, filePath) {
+  if (!page || !handle || !filePath) {
+    return;
+  }
+  try {
+    const box = await handle.boundingBox();
+    if (!box) {
+      return;
+    }
+    const pad = 8;
+    let viewport = page.viewport && page.viewport();
+    if (!viewport || !viewport.width || !viewport.height) {
+      try {
+        viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+      } catch (err) {
+        viewport = {};
+      }
+    }
+    const clip = {
+      x: Math.max(0, box.x - pad),
+      y: Math.max(0, box.y - pad),
+      width: box.width + pad * 2,
+      height: box.height + pad * 2
+    };
+    if (viewport && viewport.width) {
+      clip.width = Math.min(clip.width, Math.max(1, viewport.width - clip.x));
+    }
+    if (viewport && viewport.height) {
+      clip.height = Math.min(clip.height, Math.max(1, viewport.height - clip.y));
+    }
+    clip.width = Math.max(1, clip.width);
+    clip.height = Math.max(1, clip.height);
+    await page.screenshot({ path: filePath, clip });
+  } catch (err) {
+    console.warn(`Unable to capture area screenshot (${path.basename(filePath)}): ${err.message}`);
+  }
+}
+
 async function saveDom(page, filePath) {
   if (!page) {
     return;
@@ -166,12 +204,15 @@ async function applyWait(page, step) {
   }
 }
 
-async function performClick(page, step) {
+async function performClick(page, step, areaPath) {
   if (!step.selector) {
     throw new Error('Click step missing selector.');
   }
   const handle = await resolveHandle(page, step.selector, { timeout: DEFAULT_TIMEOUT });
   try {
+    if (areaPath) {
+      await snapArea(page, handle, areaPath);
+    }
     await robustClick(page, handle);
   } finally {
     try {
@@ -183,7 +224,7 @@ async function performClick(page, step) {
   await applyWait(page, step);
 }
 
-async function performType(page, step) {
+async function performType(page, step, areaPath) {
   if (!step.selector) {
     throw new Error('Type step missing selector.');
   }
@@ -191,6 +232,9 @@ async function performType(page, step) {
   const value = step.value != null ? String(step.value) : '';
   const delay = typeof step.delay === 'number' ? step.delay : 30;
   try {
+    if (areaPath) {
+      await snapArea(page, handle, areaPath);
+    }
     const result = await handle.evaluate((el, inputValue) => {
       if (el instanceof HTMLSelectElement) {
         const options = Array.from(el.options);
@@ -300,16 +344,17 @@ async function run() {
     console.log(`Executing step ${index + 1}/${steps.length}: ${step.action}`);
 
     try {
+      const areaPath = path.join(artifactsDir, `${label}-area.png`);
       if (shotsMode !== 'none') {
         await snap(page, path.join(artifactsDir, `${label}-pre.png`));
       }
 
       switch (step.action) {
         case 'click':
-          await performClick(page, step);
+          await performClick(page, step, areaPath);
           break;
         case 'type':
-          await performType(page, step);
+          await performType(page, step, areaPath);
           break;
         case 'wait':
           await performWait(page, step);

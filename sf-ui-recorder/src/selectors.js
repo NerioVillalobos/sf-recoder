@@ -225,6 +225,7 @@ async function findByText(page, selector, timeout) {
         page,
         ({ searchText, matchMode }) => {
           const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+          const toKey = value => normalize(value).toLowerCase();
 
           function visibleText(el) {
             if (!(el instanceof Element)) {
@@ -286,6 +287,7 @@ async function findByText(page, selector, timeout) {
           }
 
           const target = normalize(searchText);
+          const targetKey = toKey(searchText);
           const mode = matchMode || 'equals';
           let regex = null;
           if (mode === 'regex') {
@@ -306,11 +308,12 @@ async function findByText(page, selector, timeout) {
               continue;
             }
             const normalized = normalize(textValue);
+            const key = toKey(textValue);
             let matches = false;
             if (mode === 'equals') {
-              matches = normalized === target;
+              matches = key === targetKey;
             } else if (mode === 'contains') {
-              matches = normalized.includes(target);
+              matches = key.includes(targetKey);
             } else if (mode === 'regex' && regex) {
               matches = regex.test(normalized);
             }
@@ -350,6 +353,7 @@ async function findByRole(page, selector, timeout) {
             const cleaned = normalize(value);
             return cleaned.length > MAX_TEXT ? cleaned.slice(0, MAX_TEXT).trim() : cleaned;
           };
+          const toKey = value => normalize(value).toLowerCase();
 
           function visibleText(el) {
             if (!(el instanceof Element)) {
@@ -447,40 +451,74 @@ async function findByRole(page, selector, timeout) {
             return results;
           }
 
-          function candidateNames(el) {
-            const names = [];
-            const base = accessibleName(el);
-            if (base) {
-              names.push(base);
+          function candidateNames(el, roleLower, targetKey) {
+            const keys = new Set();
+            const push = value => {
+              const key = toKey(value);
+              if (key) {
+                keys.add(key);
+              }
+            };
+
+            push(accessibleName(el));
+            push(el.getAttribute('aria-label'));
+            push(el.getAttribute('title'));
+            push(el.getAttribute('data-label'));
+            push(el.getAttribute('data-name'));
+            push(el.getAttribute('data-value'));
+            push(el.getAttribute('data-target-selection-name'));
+            push(el.getAttribute('placeholder'));
+
+            const labelledBy = el.getAttribute('aria-labelledby');
+            if (labelledBy) {
+              for (const id of labelledBy.split(/\s+/)) {
+                const ref = id ? document.getElementById(id) : null;
+                if (ref) {
+                  push(ref.textContent);
+                }
+              }
             }
-            if (!base) {
-              const container = el.closest('[data-label], [data-name], [data-value], [aria-label], [title]');
+
+            const parent = el.parentElement;
+            if (parent) {
+              push(accessibleName(parent));
+              if (parent.getAttribute) {
+                push(parent.getAttribute('aria-label'));
+                push(parent.getAttribute('title'));
+                push(parent.getAttribute('data-label'));
+              }
+              push(parent.innerText || parent.textContent);
+            }
+
+            const previous = el.previousElementSibling;
+            if (previous) {
+              push(accessibleName(previous));
+              push(previous.innerText || previous.textContent);
+            }
+
+            const next = el.nextElementSibling;
+            if (next) {
+              push(accessibleName(next));
+              push(next.innerText || next.textContent);
+            }
+
+            if (roleLower === 'button' && targetKey === 'app launcher') {
+              const container = el.closest('.appLauncher, .app-launcher, .slds-app-launcher, .slds-icon-waffle, [data-app-launcher]');
               if (container) {
-                const fromContainer = accessibleName(container) || visibleText(container);
-                if (fromContainer) {
-                  names.push(limit(fromContainer));
+                push(accessibleName(container));
+                if (container.getAttribute) {
+                  push(container.getAttribute('title'));
+                  push(container.getAttribute('aria-label'));
                 }
-              }
-              const parent = el.parentElement;
-              if (parent) {
-                const fromParent = accessibleName(parent) || visibleText(parent);
-                if (fromParent) {
-                  names.push(limit(fromParent));
-                }
-              }
-              const sibling = el.nextElementSibling;
-              if (sibling) {
-                const fromSibling = accessibleName(sibling) || visibleText(sibling);
-                if (fromSibling) {
-                  names.push(limit(fromSibling));
-                }
+                push(container.innerText || container.textContent);
               }
             }
-            return names.map(normalize).filter(Boolean);
+
+            return Array.from(keys.values());
           }
 
           const roleLower = (roleName || '').toLowerCase();
-          const target = normalize(targetName);
+          const targetKey = toKey(targetName);
           let best = null;
           let bestArea = Infinity;
 
@@ -492,12 +530,26 @@ async function findByRole(page, selector, timeout) {
             if (attrRole !== roleLower) {
               continue;
             }
-            const names = candidateNames(element);
-            if (!names.some(candidate => candidate === target)) {
+            const names = candidateNames(element, roleLower, targetKey);
+            const directMatch = names.some(candidate => candidate === targetKey);
+            const allowContains = roleLower === 'button' && targetKey === 'app launcher';
+            const containsMatch = allowContains && names.some(candidate => candidate.includes(targetKey));
+            if (!directMatch && !containsMatch) {
               continue;
             }
             const rect = element.getBoundingClientRect();
             const area = rect && rect.width && rect.height ? rect.width * rect.height : Number.MAX_VALUE;
+
+            if (allowContains && !directMatch) {
+              const titleKey = toKey(element.getAttribute('title'));
+              const ariaKey = toKey(element.getAttribute('aria-label'));
+              if (titleKey === targetKey || ariaKey === targetKey) {
+                best = element;
+                bestArea = area;
+                break;
+              }
+            }
+
             if (!best || area < bestArea) {
               best = element;
               bestArea = area;

@@ -29,7 +29,7 @@ node src/recorder.js --org <alias> --out steps/mi-flujo.json --ret /lightning/n/
 
 ### Recording tips
 
-- Ignore App Launcher noise: clicks on the waffle button or the "Search apps and items" input are intentionally skipped. Land directly on the target page with `start.retURL` instead of relying on the App Launcher flow.
+- App Launcher flows are captured via role selectors: waffle `{"type":"role","role":"button","name":"App Launcher"}`, search box `{"type":"role","role":"searchbox","name":"Search apps and items..."}`, and app choices such as `{"type":"role","role":"option","name":"Field Service Settings"}`. You can still land directly with `start.retURL`, but the recorder no longer discards these interactions.
 - When a click hits a small `+` expander in the left nav, the recorder walks up to the parent item and captures the section label (for example `{ "type": "text", "text": "Optimization" }`).
 - Lightning status summaries such as `"4 statuses selected"` are rewritten to a contextual XPath pointing at the combobox button inside the correct card/field (for example the Resource Schedule Optimization → Pin Criteria selector shown below).
 - Prefer stable tabs or clearly labelled buttons. The recorder falls back to XPath only when it cannot find a role, label, or short visible text.
@@ -51,6 +51,7 @@ node src/runner.js --org <alias> --steps steps/flow.json --ret /lightning/page/h
 - Screenshot modes: `--shots none` disables pre/post captures, `--shots step` (default) records pre/post plus error images, and `--shots verbose` additionally saves HTML snapshots on failure.
 - Artifacts live under `runs/<timestamp>-<id>/`, keeping every pre/post/error asset grouped by run id.
 - Lightning waits rely on spinner/modal detection, and every click scrolls into view before attempting a Puppeteer click with a DOM fallback retry.
+- Role selectors now cover `button`, `menuitem`, `option`, `tab`, `link`, and `searchbox`, matching the accessible name rendered in Lightning (including App Launcher controls).
 
 ## Replaying a flow
 
@@ -113,8 +114,8 @@ Notes:
 - Additional documentation and schema details live in `sf-ui-recorder/README.md`.
 - Text selectors support `match: "equals" | "contains" | "regex"` to address Lightning labels that vary between orgs.
 - Navigation clicks scroll into view, retry with a DOM `click()` if Puppeteer complains, and wait for the page to reach a network-idle state before the next step.
-- Failures always emit a `step-<n>-error.png` screenshot and, when `--shots verbose`, an accompanying `step-<n>-dom.html` dump fo
-r debugging.
+- Failures always emit a `step-<n>-error.png` screenshot and, when `--shots verbose`, an accompanying `step-<n>-dom.html` dump for debugging.
+- Every resolved step also writes `step-<n>-area.png` so you can see the specific control that was interacted with during replay.
 - The recorder and runner launch browsers at 1600×900 so Lightning stays in its desktop layout.
 
 ## Sample: Field Service Settings update

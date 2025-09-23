@@ -256,7 +256,7 @@ async function main() {
       const FIELD_SERVICE_OPTION = /field service settings/i;
       const APP_LAUNCHER_TEXT = /app launcher/i;
       const APP_LAUNCHER_SEARCH = /search apps and items/i;
-      const PRIMARY_ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],button,a,[role="tab"],[role="link"],input,textarea,select';
+      const PRIMARY_ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],[role="searchbox"],button,a,[role="tab"],[role="link"],input,textarea,select';
       const CLOSEST_ACTIONABLE_QUERY = `${PRIMARY_ACTIONABLE_QUERY},[data-testid],[title],[aria-label]`;
       const MENU_CONTAINER_QUERY = '[role="menuitem"],[role="option"],[role="button"],[role="tab"],[role="link"],button,a';
       const normalize = text => (text || '').replace(/\s+/g, ' ').trim();
@@ -423,6 +423,46 @@ async function main() {
           current = parent;
         }
         return '/' + segments.join('/');
+      }
+
+      function buildCssPath(el) {
+        if (!(el instanceof Element)) {
+          return '';
+        }
+        if (el.id) {
+          return `#${CSS.escape(el.id)}`;
+        }
+        const segments = [];
+        let current = el;
+        let depth = 0;
+        while (current && current instanceof Element && depth < 5) {
+          let selector = current.tagName.toLowerCase();
+          const classList = current.classList ? Array.from(current.classList).filter(Boolean) : [];
+          if (classList.length) {
+            selector += classList
+              .slice(0, 2)
+              .map(cls => `.${CSS.escape(cls)}`)
+              .join('');
+          } else {
+            let index = 1;
+            let sibling = current.previousElementSibling;
+            while (sibling) {
+              if (sibling.tagName === current.tagName) {
+                index += 1;
+              }
+              sibling = sibling.previousElementSibling;
+            }
+            selector += `:nth-of-type(${index})`;
+          }
+          segments.unshift(selector);
+          const parent = current.parentElement;
+          if (!parent || !(parent instanceof Element)) {
+            break;
+          }
+          current = parent;
+          depth += 1;
+        }
+        return segments.join(' > ');
       }
 
       function computeAreaClip(el) {
@@ -820,7 +860,8 @@ async function main() {
           };
         };
 
-        if (target && isTinyClickTarget(target)) {
+        const isPlusLike = node => node && isTinyClickTarget(node);
+        if (isPlusLike(element) || isPlusLike(target)) {
           const container = findMenuContainer(path, element);
           if (container) {
             const name = accessibleName(container);
@@ -853,7 +894,7 @@ async function main() {
         }
 
         const role = (element.getAttribute('role') || '').trim().toLowerCase();
-        const roleNames = new Set(['menuitem', 'option', 'button', 'tab', 'link']);
+        const roleNames = new Set(['menuitem', 'option', 'button', 'tab', 'link', 'searchbox']);
         if (role && roleNames.has(role)) {
           const name = elementName;
           if (name) {
@@ -872,41 +913,15 @@ async function main() {
           return finalize({ type: 'text', text: elementName }, element);
         }
 
-        const xpath = absoluteXPath(element);
-        if (xpath) {
-          return finalize({ type: 'xpath', value: xpath }, element);
+        const cssSelector = buildCssPath(element);
+        if (cssSelector) {
+          return finalize({ type: 'css', value: cssSelector }, element);
         }
 
         return null;
       }
 
       function shouldSkipAppLauncher(selector) {
-        if (!selector) {
-          return false;
-        }
-
-        if (selector.type === 'role') {
-          const roleName = String(selector.role || '').toLowerCase();
-          const name = String(selector.name || '');
-          if (roleName === 'button' && APP_LAUNCHER_TEXT.test(name)) {
-            return true;
-          }
-        }
-
-        if (selector.type === 'text') {
-          const text = String(selector.text || selector.value || '');
-          if (APP_LAUNCHER_TEXT.test(text) || APP_LAUNCHER_SEARCH.test(text)) {
-            return true;
-          }
-        }
-
-        if (selector.type === 'label') {
-          const text = String(selector.text || '');
-          if (APP_LAUNCHER_SEARCH.test(text)) {
-            return true;
-          }
-        }
-
         return false;
       }
 
