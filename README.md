@@ -34,13 +34,31 @@ node src/recorder.js --org <alias> --out steps/mi-flujo.json --ret /lightning/n/
 - Lightning status summaries such as `"4 statuses selected"` are rewritten to a contextual XPath pointing at the combobox button inside the correct card/field (for example the Resource Schedule Optimization → Pin Criteria selector shown below).
 - Prefer stable tabs or clearly labelled buttons. The recorder falls back to XPath only when it cannot find a role, label, or short visible text.
 
+## MVP with screenshots
+
+Capture cropped previews while recording and organize replay artifacts per run:
+
+```bash
+node src/recorder.js --org <alias> --out steps/flow.json --ret /lightning/page/home --snap-area
+```
+
+```bash
+node src/runner.js --org <alias> --steps steps/flow.json --ret /lightning/page/home --shots step --artifacts runs/demo-1
+```
+
+- `--snap-area` adds a `shots/` folder next to the output JSON and annotates each click with `note: "areaShot: shots/<n>-area.png"`.
+- The runner ignores any `start.retURL` stored in the file—pass `--ret` (default `/lightning/page/home`) for the landing path.
+- Screenshot modes: `--shots none` disables pre/post captures, `--shots step` (default) records pre/post plus error images, and `--shots verbose` additionally saves HTML snapshots on failure.
+- Artifacts live under `runs/<timestamp>-<id>/`, keeping every pre/post/error asset grouped by run id.
+- Lightning waits rely on spinner/modal detection, and every click scrolls into view before attempting a Puppeteer click with a DOM fallback retry.
+
 ## Replaying a flow
 
 ```bash
 node src/runner.js --org <alias> --steps steps/mi-flujo.json
 ```
 
-The runner executes headlessly by default. Pass `--headful` if you want to observe execution, `--timeout 20000` (milliseconds) to extend selector resolution when Lightning loads slowly, and `--no-validate` to skip AJV validation for quick experiments. Failures always emit a `debug-step-<n>.png` screenshot; add `--debug` to capture additional selector diagnostics alongside the image.
+The runner executes headlessly by default. Pass `--headful` if you want to observe execution, `--ret <path>` to override the landing page, `--shots none|step|verbose` to control pre/post/error captures, and `--artifacts <dir>` to reuse a specific folder. Use `--no-validate` to skip AJV validation for quick experiments. Failures always emit a `step-<n>-error.png` screenshot alongside the optional HTML snapshot when `--shots verbose` is enabled.
 
 ## Scan mode (UI map)
 
@@ -95,7 +113,8 @@ Notes:
 - Additional documentation and schema details live in `sf-ui-recorder/README.md`.
 - Text selectors support `match: "equals" | "contains" | "regex"` to address Lightning labels that vary between orgs.
 - Navigation clicks scroll into view, retry with a DOM `click()` if Puppeteer complains, and wait for the page to reach a network-idle state before the next step.
-- Failures always emit a `debug-step-<n>.png` screenshot; add `--debug` to capture extra selector diagnostics.
+- Failures always emit a `step-<n>-error.png` screenshot and, when `--shots verbose`, an accompanying `step-<n>-dom.html` dump fo
+r debugging.
 - The recorder and runner launch browsers at 1600×900 so Lightning stays in its desktop layout.
 
 ## Sample: Field Service Settings update

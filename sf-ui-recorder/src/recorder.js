@@ -4,10 +4,49 @@ const puppeteer = require('puppeteer');
 const minimist = require('minimist');
 const { getOrgInfo, buildFrontdoorUrl, DEFAULT_RET_URL } = require('./sf');
 
+function clampAreaClip(data) {
+  if (!data) {
+    return null;
+  }
+  const scrollX = Number.isFinite(data.scrollX) ? data.scrollX : 0;
+  const scrollY = Number.isFinite(data.scrollY) ? data.scrollY : 0;
+  const frameOffsetX = Number.isFinite(data.frameOffsetX) ? data.frameOffsetX : 0;
+  const frameOffsetY = Number.isFinite(data.frameOffsetY) ? data.frameOffsetY : 0;
+  const originX = Number.isFinite(data.x) ? data.x : 0;
+  const originY = Number.isFinite(data.y) ? data.y : 0;
+  const width = Number.isFinite(data.width) ? data.width : 0;
+  const height = Number.isFinite(data.height) ? data.height : 0;
+  const maxWidth = Number.isFinite(data.pageWidth) ? data.pageWidth : null;
+  const maxHeight = Number.isFinite(data.pageHeight) ? data.pageHeight : null;
+
+  const clipX = Math.max(0, originX + scrollX + frameOffsetX);
+  const clipY = Math.max(0, originY + scrollY + frameOffsetY);
+  let clipWidth = Math.max(1, width);
+  let clipHeight = Math.max(1, height);
+
+  if (maxWidth !== null) {
+    clipWidth = Math.min(clipWidth, Math.max(1, maxWidth - clipX));
+  }
+  if (maxHeight !== null) {
+    clipHeight = Math.min(clipHeight, Math.max(1, maxHeight - clipY));
+  }
+
+  if (clipWidth <= 0 || clipHeight <= 0) {
+    return null;
+  }
+
+  return {
+    x: clipX,
+    y: clipY,
+    width: clipWidth,
+    height: clipHeight
+  };
+}
+
 async function main() {
   const argv = minimist(process.argv.slice(2), {
     string: ['org', 'out', 'ret'],
-    boolean: ['scan'],
+    boolean: ['scan', 'snap-area'],
     alias: { org: 'o', out: 'f', ret: 'r' }
   });
 
@@ -17,6 +56,7 @@ async function main() {
   const scanDefaultRelative = path.join('maps', `${timestamp}-map.json`);
   const outputPath = path.resolve(argv.out || (isScan ? scanDefaultRelative : 'steps/recording.json'));
   const retURL = argv.ret || DEFAULT_RET_URL;
+  const snapArea = Boolean(argv['snap-area']);
 
   if (!orgAlias) {
     console.error('Missing --org <alias> argument.');
@@ -26,7 +66,9 @@ async function main() {
   const { instanceUrl, accessToken } = getOrgInfo(orgAlias);
   const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, retURL);
 
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  const outputDir = path.dirname(outputPath);
+  fs.mkdirSync(outputDir, { recursive: true });
+  const shotsDir = snapArea ? path.join(outputDir, 'shots') : null;
 
   let planRoot = null;
   let steps = [];
@@ -34,6 +76,7 @@ async function main() {
   let writeChain = Promise.resolve();
   let persistPlan = async () => {};
   let saveStep = () => {};
+  let activePage = null;
 
   if (!isScan) {
     planRoot = { version: 1, steps: [] };
@@ -88,6 +131,27 @@ async function main() {
     saveStep = step => {
       writeChain = writeChain
         .then(async () => {
+          const areaClip = step.__areaClip || null;
+          delete step.__areaClip;
+
+          if (snapArea && shotsDir && activePage && step.action === 'click' && areaClip) {
+            const clip = clampAreaClip(areaClip);
+            if (clip) {
+              await fs.promises.mkdir(shotsDir, { recursive: true });
+              const index = steps.length + 1;
+              const filename = `${index}-area.png`;
+              const shotPath = path.join(shotsDir, filename);
+              try {
+                await activePage.screenshot({ path: shotPath, clip });
+                const relativeNote = path.posix.join('shots', filename);
+                const areaNote = `areaShot: ${relativeNote}`;
+                step.note = step.note ? `${step.note}; ${areaNote}` : areaNote;
+              } catch (shotErr) {
+                console.warn(`Failed to capture area snapshot: ${shotErr.message}`);
+              }
+            }
+          }
+
           steps.push(step);
           await persistPlan();
           console.log(`Recorded ${step.action} -> ${describeSelector(step.selector)}`);
@@ -109,6 +173,7 @@ async function main() {
   const [page] = await browser.pages();
   await page.setViewport(viewport);
   page.setDefaultTimeout(15000);
+  activePage = page;
 
   if (isScan) {
     console.log(`Opening ${frontdoorUrl}`);
@@ -146,6 +211,28 @@ async function main() {
       // ignore console relay issues
     }
   });
+
+  const attachToFrame = async frame => {
+    if (!frame || frame.isDetached()) {
+      return;
+    }
+    try {
+      await frame.evaluate(() => {
+        if (window.__sfRecorderAttach) {
+          window.__sfRecorderAttach();
+        }
+      });
+    } catch (err) {
+      // cross-origin frames are ignored
+    }
+  };
+
+  const frameListener = frame => {
+    attachToFrame(frame);
+  };
+
+  page.on('frameattached', frameListener);
+  page.on('framenavigated', frameListener);
 
   await page.evaluateOnNewDocument(() => {
     window.__sfRecorderReady = false;
@@ -336,6 +423,51 @@ async function main() {
           current = parent;
         }
         return '/' + segments.join('/');
+      }
+
+      function computeAreaClip(el) {
+        if (!(el instanceof Element)) {
+          return null;
+        }
+        const rect = el.getBoundingClientRect();
+        if (!rect) {
+          return null;
+        }
+        const padding = 8;
+        const paddedX = Math.max(rect.x - padding, 0);
+        const paddedY = Math.max(rect.y - padding, 0);
+        const maxWidth = Math.max(1, window.innerWidth - paddedX);
+        const maxHeight = Math.max(1, window.innerHeight - paddedY);
+        const paddedWidth = Math.min(rect.width + padding * 2, maxWidth);
+        const paddedHeight = Math.min(rect.height + padding * 2, maxHeight);
+        if (paddedWidth <= 0 || paddedHeight <= 0) {
+          return null;
+        }
+
+        let frameOffsetX = 0;
+        let frameOffsetY = 0;
+        try {
+          if (window.frameElement && typeof window.frameElement.getBoundingClientRect === 'function') {
+            const frameRect = window.frameElement.getBoundingClientRect();
+            frameOffsetX = frameRect.x;
+            frameOffsetY = frameRect.y;
+          }
+        } catch (err) {
+          // ignore cross-origin access
+        }
+
+        return {
+          x: paddedX,
+          y: paddedY,
+          width: Math.max(1, paddedWidth),
+          height: Math.max(1, paddedHeight),
+          scrollX: window.scrollX || window.pageXOffset || 0,
+          scrollY: window.scrollY || window.pageYOffset || 0,
+          frameOffsetX,
+          frameOffsetY,
+          pageWidth: document.documentElement ? document.documentElement.scrollWidth : window.innerWidth,
+          pageHeight: document.documentElement ? document.documentElement.scrollHeight : window.innerHeight
+        };
       }
 
       function climbFor(element, predicate) {
@@ -624,7 +756,17 @@ async function main() {
         const fieldLiteral = xpathLiteral(fieldLabel);
         const xpath = `//*[normalize-space()=${blockLiteral}]/ancestor::*[contains(@class,'slds-card') or contains(@class,'slds-section')][1]//*[normalize-space()=${fieldLiteral}]/ancestor::*[self::div or self::label][1]//button[contains(@aria-haspopup,'listbox') or @role='combobox' or contains(normalize-space(.),'statuses selected')]`;
 
-        return { xpath, blockTitle, fieldLabel };
+        let buttonElement = element.closest ? element.closest('button') : null;
+        if (!buttonElement) {
+          const fieldContainer = findFieldContainer(element, block);
+          if (fieldContainer) {
+            buttonElement = fieldContainer.querySelector(
+              "button[aria-haspopup], button[role='combobox'], button"
+            );
+          }
+        }
+
+        return { xpath, blockTitle, fieldLabel, buttonElement: buttonElement || element };
       }
 
       function findActionable(path) {
@@ -665,6 +807,19 @@ async function main() {
           return null;
         }
 
+        let areaTarget = element;
+
+        const finalize = (selector, clipSource) => {
+          if (!selector) {
+            return null;
+          }
+          const clipTarget = clipSource || areaTarget || element;
+          return {
+            selector,
+            areaClip: computeAreaClip(clipTarget)
+          };
+        };
+
         if (target && isTinyClickTarget(target)) {
           const container = findMenuContainer(path, element);
           if (container) {
@@ -673,7 +828,8 @@ async function main() {
               if (typeof window.sfRecorderLog === 'function') {
                 window.sfRecorderLog(`Recorded nav section: ${name}`);
               }
-              return { type: 'text', text: name };
+              areaTarget = container;
+              return finalize({ type: 'text', text: name }, container);
             }
           }
         }
@@ -686,13 +842,14 @@ async function main() {
             if (typeof window.sfRecorderLog === 'function') {
               window.sfRecorderLog(`Recorded combobox: ${combobox.blockTitle} > ${combobox.fieldLabel}`);
             }
-            return { type: 'xpath', value: combobox.xpath };
+            areaTarget = combobox.buttonElement || element;
+            return finalize({ type: 'xpath', value: combobox.xpath }, areaTarget);
           }
         }
 
         const dataTestId = element.getAttribute('data-testid') || (element.dataset && element.dataset.testid);
         if (dataTestId) {
-          return { type: 'dataTestId', value: limit(dataTestId) };
+          return finalize({ type: 'dataTestId', value: limit(dataTestId) }, element);
         }
 
         const role = (element.getAttribute('role') || '').trim().toLowerCase();
@@ -700,24 +857,24 @@ async function main() {
         if (role && roleNames.has(role)) {
           const name = elementName;
           if (name) {
-            return { type: 'role', role, name };
+            return finalize({ type: 'role', role, name }, element);
           }
         }
 
         if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
           const labelText = labelTextForInput(element);
           if (labelText) {
-            return { type: 'label', text: labelText };
+            return finalize({ type: 'label', text: labelText }, element);
           }
         }
 
         if (elementName) {
-          return { type: 'text', text: elementName };
+          return finalize({ type: 'text', text: elementName }, element);
         }
 
         const xpath = absoluteXPath(element);
         if (xpath) {
-          return { type: 'xpath', value: xpath };
+          return finalize({ type: 'xpath', value: xpath }, element);
         }
 
         return null;
@@ -779,7 +936,11 @@ async function main() {
           return;
         }
         const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
-        const selector = buildSelector(event.target, path);
+        const capture = buildSelector(event.target, path);
+        if (!capture) {
+          return;
+        }
+        const selector = capture.selector;
         if (!selector) {
           return;
         }
@@ -787,12 +948,16 @@ async function main() {
           return;
         }
         handleAppLauncherSelection(selector);
-        window.sfRecordEvent({
+        const step = {
           action: 'click',
           selector,
           timestamp: Date.now(),
           waitFor: { type: 'short' }
-        });
+        };
+        if (capture.areaClip) {
+          step.__areaClip = capture.areaClip;
+        }
+        window.sfRecordEvent(step);
       }
 
       function recordChange(event) {
@@ -801,7 +966,8 @@ async function main() {
           return;
         }
         const path = typeof event.composedPath === 'function' ? event.composedPath() : [target];
-        const selector = buildSelector(target, path);
+        const capture = buildSelector(target, path);
+        const selector = capture && capture.selector;
         if (!selector) {
           return;
         }
@@ -825,6 +991,8 @@ async function main() {
       console.log('[SF Recorder] Listeners attached.');
     }
 
+    window.__sfRecorderAttach = attachRecorder;
+
     if (document.readyState === 'loading') {
       window.addEventListener('DOMContentLoaded', attachRecorder, { once: true });
     } else {
@@ -834,6 +1002,7 @@ async function main() {
 
   console.log(`Opening ${frontdoorUrl}`);
   await page.goto(frontdoorUrl, { waitUntil: 'networkidle2' });
+  await Promise.all(page.frames().map(attachToFrame));
 
   try {
     await page.waitForFunction(() => window.__sfRecorderReady === true, { timeout: 45000, polling: 250 });

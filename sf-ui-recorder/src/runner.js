@@ -4,23 +4,62 @@ const puppeteer = require('puppeteer');
 const minimist = require('minimist');
 const Ajv = require('ajv');
 const { getOrgInfo, buildFrontdoorUrl, DEFAULT_RET_URL } = require('./sf');
-const { resolveHandle, buildTextVariants, debugTextMatches } = require('./selectors');
+const { resolveHandle } = require('./selectors');
+
+const DEFAULT_TIMEOUT = 20000;
+const DEFAULT_WAIT_SHORT = 300;
+
+function loadJson(filePath) {
+  const absPath = path.resolve(filePath);
+  if (!fs.existsSync(absPath)) {
+    throw new Error(`Steps file not found: ${absPath}`);
+  }
+  return JSON.parse(fs.readFileSync(absPath, 'utf8'));
+}
 
 function loadSchema() {
   const schemaPath = path.resolve(__dirname, '../schema/steps.schema.json');
   return JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 }
 
-function loadSteps(filePath) {
-  const absPath = path.resolve(filePath);
-  if (!fs.existsSync(absPath)) {
-    throw new Error(`Steps file not found: ${absPath}`);
+function parsePlan(plan) {
+  if (Array.isArray(plan)) {
+    return { steps: plan, root: plan };
   }
-  const contents = fs.readFileSync(absPath, 'utf8');
-  return JSON.parse(contents);
+  if (plan && typeof plan === 'object' && Array.isArray(plan.steps)) {
+    return { steps: plan.steps, root: plan };
+  }
+  throw new Error('Invalid steps root: expected array or {steps:[...]}.');
 }
 
-async function wait(page, ms) {
+function createArtifactsDir(dir) {
+  const abs = path.resolve(dir);
+  fs.mkdirSync(abs, { recursive: true });
+  return abs;
+}
+
+async function waitForLexIdle(page, { timeout = 30000 } = {}) {
+  if (!page) {
+    return;
+  }
+  try {
+    await page.waitForFunction(
+      () => {
+        const spinner = document.querySelector('.slds-spinner, [data-aura-class="forceLoadingSpinner"]');
+        const modal = document.querySelector('.slds-modal.slds-fade-in-open, .forceModal');
+        return !spinner && !modal;
+      },
+      { timeout }
+    );
+    if (typeof page.waitForTimeout === 'function') {
+      await page.waitForTimeout(300);
+    }
+  } catch (err) {
+    // Allow continuation when Lightning keeps spinners around.
+  }
+}
+
+async function sleep(page, ms) {
   if (ms <= 0) {
     return;
   }
@@ -31,506 +70,287 @@ async function wait(page, ms) {
   }
 }
 
-function waitDuration(waitFor) {
-  if (!waitFor) {
-    return 300;
-  }
-  if (typeof waitFor.ms === 'number') {
-    return waitFor.ms;
-  }
-  switch (waitFor.type) {
-    case 'networkidle':
-      return 2000;
-    case 'dom':
-      return 800;
-    case 'short':
-    default:
-      return 500;
-  }
-}
-
-async function applyWait(page, waitFor) {
-  const duration = waitDuration(waitFor);
-  await wait(page, duration);
-}
-
-async function waitForNetworkIdle(page, timeout = 15000) {
-  if (!page || typeof page.waitForNetworkIdle !== 'function') {
+async function snap(page, filePath) {
+  if (!page) {
     return;
   }
   try {
-    await page.waitForNetworkIdle({ idleTime: 500, timeout });
+    await page.screenshot({ path: filePath, fullPage: false });
   } catch (err) {
-    // Allow execution to continue when Lightning keeps the network busy.
+    console.warn(`Unable to capture screenshot (${path.basename(filePath)}): ${err.message}`);
   }
 }
 
-async function ensureClickable(page, handle) {
-  const resultHandle = await handle.evaluateHandle(element => {
-    const ACTIONABLE_SELECTOR = [
-      'button',
-      'a',
-      'input',
-      'textarea',
-      'select',
-      '[role="button"]',
-      '[role="menuitem"]',
-      '[role="option"]',
-      '[role="tab"]',
-      '[role="link"]',
-      '[role="radio"]',
-      '[role="checkbox"]',
-      '[role="switch"]'
-    ].join(',');
-
-    const isElement = node => node instanceof Element;
-
-    const isActionable = node => {
-      if (!isElement(node)) {
-        return false;
-      }
-      return typeof node.matches === 'function' && node.matches(ACTIONABLE_SELECTOR);
-    };
-
-    const enqueueShadowChildren = (queue, node) => {
-      if (!node.shadowRoot) {
-        return;
-      }
-      queue.push(...node.shadowRoot.children);
-      const slots = Array.from(node.shadowRoot.querySelectorAll('slot'));
-      for (const slot of slots) {
-        if (typeof slot.assignedElements === 'function') {
-          queue.push(...slot.assignedElements());
-        }
-      }
-    };
-
-    const visited = new Set();
-    const queue = [];
-    if (isElement(element)) {
-      queue.push(element);
-    }
-
-    while (queue.length) {
-      const node = queue.shift();
-      if (!isElement(node) || visited.has(node)) {
-        continue;
-      }
-      visited.add(node);
-
-      if (isActionable(node)) {
-        return node;
-      }
-
-      enqueueShadowChildren(queue, node);
-      queue.push(...node.children);
-    }
-
-    return isElement(element) ? element : null;
-  });
-
-  const element = resultHandle.asElement();
-  if (!element) {
-    await resultHandle.dispose();
-    const fallback = handle.asElement();
-    if (fallback) {
-      return fallback;
-    }
-    throw new Error('Selector did not resolve to a DOM element.');
+async function saveDom(page, filePath) {
+  if (!page) {
+    return;
   }
-
-  await handle.dispose();
-  return element;
+  try {
+    const html = await page.content();
+    await fs.promises.writeFile(filePath, html, 'utf8');
+  } catch (err) {
+    console.warn(`Unable to capture DOM snapshot (${path.basename(filePath)}): ${err.message}`);
+  }
 }
 
-function shouldWaitForNetworkIdle(step) {
-  if (!step) {
-    return false;
+async function robustClick(page, handle) {
+  if (!handle) {
+    throw new Error('Missing element handle for click.');
   }
-
-  if (step.waitFor && step.waitFor.type === 'networkidle') {
-    return true;
-  }
-
-  if (!step.selector) {
-    return false;
-  }
-  const selector = step.selector;
-  if (selector.type === 'role') {
-    const role = String(selector.role || '').toLowerCase();
-    const name = String(selector.name || '').toLowerCase();
-    if (['menuitem', 'tab', 'link', 'option'].includes(role)) {
-      return true;
-    }
-    if (role === 'button' && name) {
-      if (/\b(save|setup|settings)\b/.test(name)) {
-        return true;
-      }
-      if (/\b(field service settings|optimization|optimización|logic|lógica)\b/.test(name)) {
-        return true;
-      }
-    }
-  }
-  if (selector.type === 'text' || selector.type === 'label') {
-    const text = String(selector.text || selector.value || '').toLowerCase();
-    if (!text) {
-      return false;
-    }
-    if (/\b(save|setup|settings)\b/.test(text)) {
-      return true;
-    }
-    if (/\b(field service settings|optimization|optimización|logic|lógica)\b/.test(text)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-async function performClick(page, step, timeoutOverride, debugMode) {
-  const handles = await resolveHandle(page, step.selector, {
-    timeout: timeoutOverride
-  });
-  const [primaryHandle, ...extraHandles] = handles;
-  if (!primaryHandle) {
-    throw new Error('Selector did not resolve to an element.');
-  }
-  const target = await ensureClickable(page, primaryHandle);
-  await target.evaluate(el => {
+  await page.evaluate(el => {
     if (el && el.scrollIntoView) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     }
-  });
-
-  let clickCompleted = false;
-  let fallbackUsed = false;
-  let primaryError;
+  }, handle);
 
   try {
+    await handle.click({ delay: 10 });
+    return;
+  } catch (primary) {
     try {
-      await target.click({ delay: 10 });
-      clickCompleted = true;
-    } catch (err) {
-      primaryError = err;
-      try {
-        await target.evaluate(el => {
-          if (el) {
-            el.click();
-          }
-        });
-        fallbackUsed = true;
-        await wait(page, 150);
-        await target.click({ delay: 10 });
-        clickCompleted = true;
-      } catch (retryError) {
-        if (debugMode) {
-          console.warn('DOM click fallback retry failed:', retryError.message);
+      await page.evaluate(el => {
+        if (el && typeof el.click === 'function') {
+          el.click();
         }
-        throw primaryError;
-      }
-    }
-
-    if (fallbackUsed && debugMode) {
-      console.warn('Puppeteer click fallback succeeded via DOM click + retry.');
-    }
-
-    if (clickCompleted && shouldWaitForNetworkIdle(step)) {
-      await waitForNetworkIdle(page);
-    }
-
-    if (clickCompleted) {
-      await applyWait(page, step.waitFor);
-    }
-  } finally {
-    try {
-      await target.dispose();
-    } catch (disposeErr) {
-      // ignore disposal issues
-    }
-    for (const extra of extraHandles) {
-      if (!extra) {
-        continue;
-      }
-      try {
-        await extra.dispose();
-      } catch (err) {
-        // ignore disposal issues
-      }
+      }, handle);
+      await sleep(page, 150);
+      await handle.click({ delay: 10 });
+    } catch (secondary) {
+      throw primary;
     }
   }
 }
 
-async function performType(page, step, timeoutOverride) {
-  const handles = await resolveHandle(page, step.selector, {
-    timeout: timeoutOverride
-  });
-  const [handle, ...extraHandles] = handles;
-  if (!handle) {
-    throw new Error('Selector did not resolve to an element.');
+async function applyWait(page, step) {
+  if (!step) {
+    return;
   }
-  const value = step.value || '';
-  const delay = typeof step.delay === 'number' ? step.delay : 30;
+  if (step.action === 'wait' && typeof step.ms === 'number') {
+    await sleep(page, step.ms);
+    return;
+  }
+  const waitFor = step.waitFor || {};
 
-  const result = await handle.evaluate((el, inputValue) => {
-    if (el instanceof HTMLSelectElement) {
-      const options = Array.from(el.options);
-      const match = options.find(opt => opt.value === inputValue || opt.text === inputValue);
-      if (match) {
-        el.value = match.value;
-      } else {
-        el.value = inputValue;
-      }
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      return { typed: false };
-    }
-
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-      el.focus();
-      el.value = '';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      return { typed: true };
-    }
-
-    if (el.isContentEditable) {
-      el.focus();
-      el.textContent = '';
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      return { typed: true };
-    }
-
-    return { typed: false };
-  }, value);
-
-  if (result && result.typed) {
-    await handle.type(value, { delay });
+  if (typeof waitFor.ms === 'number') {
+    await sleep(page, waitFor.ms);
+    return;
   }
 
-  await handle.evaluate(el => {
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-  });
-
-  await applyWait(page, step.waitFor);
-
-  try {
-    await handle.dispose();
-  } catch (err) {
-    // ignore disposal issues
-  }
-
-  for (const extra of extraHandles) {
-    if (!extra) {
-      continue;
-    }
+  if (waitFor.selector) {
     try {
-      await extra.dispose();
+      const handle = await resolveHandle(page, waitFor.selector, { timeout: DEFAULT_TIMEOUT });
+      if (handle) {
+        await handle.dispose();
+      }
+    } catch (err) {
+      console.warn(`waitFor selector not resolved: ${err.message}`);
+    }
+  }
+
+  switch (waitFor.type) {
+    case 'networkidle':
+      await waitForLexIdle(page);
+      break;
+    case 'dom':
+      try {
+        await page.waitForFunction(() => document.readyState === 'complete', { timeout: DEFAULT_TIMEOUT });
+      } catch (err) {
+        // continue when DOM stays busy
+      }
+      await sleep(page, 200);
+      break;
+    case 'short':
+    default:
+      await sleep(page, DEFAULT_WAIT_SHORT);
+      break;
+  }
+}
+
+async function performClick(page, step) {
+  if (!step.selector) {
+    throw new Error('Click step missing selector.');
+  }
+  const handle = await resolveHandle(page, step.selector, { timeout: DEFAULT_TIMEOUT });
+  try {
+    await robustClick(page, handle);
+  } finally {
+    try {
+      await handle.dispose();
     } catch (err) {
       // ignore disposal issues
     }
   }
+  await applyWait(page, step);
+}
+
+async function performType(page, step) {
+  if (!step.selector) {
+    throw new Error('Type step missing selector.');
+  }
+  const handle = await resolveHandle(page, step.selector, { timeout: DEFAULT_TIMEOUT });
+  const value = step.value != null ? String(step.value) : '';
+  const delay = typeof step.delay === 'number' ? step.delay : 30;
+  try {
+    const result = await handle.evaluate((el, inputValue) => {
+      if (el instanceof HTMLSelectElement) {
+        const options = Array.from(el.options);
+        const match = options.find(opt => opt.value === inputValue || opt.text === inputValue);
+        el.value = match ? match.value : inputValue;
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return { typed: false };
+      }
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        el.focus();
+        el.value = '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return { typed: true };
+      }
+      if (el && el.isContentEditable) {
+        el.focus();
+        el.textContent = '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return { typed: true };
+      }
+      return { typed: false };
+    }, value);
+
+    if (result && result.typed) {
+      await handle.type(value, { delay });
+    }
+
+    await handle.evaluate(el => {
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  } finally {
+    try {
+      await handle.dispose();
+    } catch (err) {
+      // ignore disposal issues
+    }
+  }
+
+  await applyWait(page, step);
 }
 
 async function performWait(page, step) {
-  await applyWait(page, step.waitFor);
+  await applyWait(page, step);
 }
 
-async function captureDiagnostics(page, step, index, error, debugMode) {
-  console.error('--- Debug diagnostics ---');
-  console.error(`Step ${index + 1} selector:`, step.selector);
-  console.error('Error:', error && error.message ? error.message : error);
-
-  if (step.selector && step.selector.type === 'text') {
-    const textValue = step.selector.text ?? step.selector.value ?? '';
-    const matchMode = step.selector.match || 'equals';
-    if (matchMode === 'regex') {
-      console.error(`Regex pattern used: /${textValue}/`);
-    }
-
-    if (debugMode) {
-      try {
-        const variants = buildTextVariants(textValue);
-        console.error('Text variants considered:', variants.join(' | '));
-        const report = await debugTextMatches(page, textValue, 10);
-        if (report.matches.length === 0) {
-          console.error('No elements contained any of the variants.');
-        } else {
-          console.error('Closest matches:');
-          report.matches.forEach((match, idx) => {
-            console.error(
-              `  [${idx + 1}] <${match.tag}> via ${match.match.kind} -> "${match.text}"`
-            );
-            if (match.dataTestId) {
-              console.error(`       data-testid: ${match.dataTestId}`);
-            }
-            if (match.ariaLabel) {
-              console.error(`       aria-label: ${match.ariaLabel}`);
-            }
-            if (match.placeholder) {
-              console.error(`       placeholder: ${match.placeholder}`);
-            }
-            if (match.role) {
-              console.error(`       role: ${match.role}`);
-            }
-            if (match.cssPath) {
-              console.error(`       css: ${match.cssPath}`);
-            }
-          });
-        }
-      } catch (diagErr) {
-        console.error('Failed to analyze text matches:', diagErr.message);
-      }
-    } else {
-      console.error('Re-run with --debug to inspect text variants.');
-    }
-  } else if (!debugMode) {
-    console.error('Re-run with --debug for additional diagnostics.');
-  }
-
-  const screenshotPath = path.resolve(`debug-step-${index + 1}.png`);
-  try {
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    console.error(`Saved page screenshot to ${screenshotPath}`);
-  } catch (shotErr) {
-    console.error('Failed to capture screenshot:', shotErr.message);
-  }
-
-  console.error('--- End diagnostics ---');
-}
-
-async function dismissInvalidUrlModalAndFallbackHome(page, instanceUrl) {
-  if (!page || !instanceUrl) {
-    return;
-  }
-
-  await wait(page, 400);
-
-  let seen = false;
-  try {
-    seen = await page.evaluate(() => {
-      const modal = document.querySelector('.slds-modal__container, .forceModal, .modal-container');
-      if (!modal) {
-        return false;
-      }
-      const txt = modal.innerText || '';
-      return /page doesn[\u2019']?t exist/i.test(txt);
-    });
-  } catch (err) {
-    return;
-  }
-
-  if (!seen) {
-    return;
-  }
-
-  try {
-    await page.evaluate(() => {
-      const btn = document.querySelector('.slds-modal__close, .slds-modal__header button, button[title="Close"]');
-      if (btn) {
-        btn.click();
-      }
-    });
-    await wait(page, 300);
-  } catch (err) {
-    // Ignore failures while attempting to close the modal.
-  }
-
-  const trimmed = instanceUrl.replace(/\/+$/, '');
-  const homeUrl = `${trimmed}/lightning/page/home`;
-  await page.goto(homeUrl, { waitUntil: 'networkidle2' });
-}
-
-async function main() {
+async function run() {
   const argv = minimist(process.argv.slice(2), {
-    string: ['org', 'steps', 'ret', 'timeout'],
-    boolean: ['headful', 'debug', 'no-validate'],
-    alias: { org: 'o', steps: 's', ret: 'r', headful: 'H', timeout: 't', debug: 'd', 'no-validate': 'n' }
+    string: ['org', 'steps', 'ret', 'artifacts', 'shots'],
+    boolean: ['headful', 'no-validate'],
+    alias: { org: 'o', steps: 's', ret: 'r' }
   });
 
   const orgAlias = argv.org;
   const stepsPath = argv.steps;
-  const headless = !argv.headful;
-  const selectorTimeout = argv.timeout !== undefined ? Number(argv.timeout) : undefined;
-  const debugMode = Boolean(argv.debug);
-  const skipValidation = Boolean(argv['no-validate']);
-
-  if (Number.isNaN(selectorTimeout)) {
-    console.error('Invalid --timeout value. Expected a number of milliseconds.');
-    process.exit(1);
-  }
-
   if (!orgAlias || !stepsPath) {
-    console.error('Usage: node src/runner.js --org <alias> --steps <file> [--ret <retURL>] [--headful] [--no-validate]');
+    console.error('Usage: node src/runner.js --org <alias> --steps <file> [--ret <retURL>] [--artifacts <dir>] [--shots none|step|verbose] [--headful] [--no-validate]');
     process.exit(1);
   }
 
-  const plan = loadSteps(stepsPath);
-  const isArrayRoot = Array.isArray(plan);
-  const steps = isArrayRoot ? plan : (plan && Array.isArray(plan.steps) ? plan.steps : null);
-  if (!steps) {
-    console.error('Invalid steps root: expected array or {steps:[]}.');
-    process.exit(1);
+  const shotsModeInput = (argv.shots || 'step').toLowerCase();
+  const shotsMode = ['none', 'step', 'verbose'].includes(shotsModeInput) ? shotsModeInput : 'step';
+
+  const schema = loadSchema();
+  const planRaw = loadJson(stepsPath);
+  const { steps, root } = parsePlan(planRaw);
+  if (!Array.isArray(steps)) {
+    throw new Error('Plan does not contain a steps array.');
   }
 
-  if (!skipValidation) {
-    const schema = loadSchema();
+  if (!argv['no-validate']) {
     const ajv = new Ajv({ allErrors: true, strict: false });
     const validate = ajv.compile(schema);
-    const rootToValidate = isArrayRoot ? plan : plan;
-    if (!validate(rootToValidate)) {
+    if (!validate(root)) {
       console.error('Steps file failed validation:', validate.errors);
       process.exit(1);
     }
   }
 
-  const landingRet = argv.ret ? String(argv.ret) : DEFAULT_RET_URL;
-
+  const retURL = argv.ret || DEFAULT_RET_URL;
   const { instanceUrl, accessToken } = getOrgInfo(orgAlias);
-  const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, landingRet);
+  const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, retURL);
 
-  const viewport = { width: 1600, height: 900 };
+  const timestamp = new Date().toISOString().replace(/[:]/g, '-');
+  const defaultRunId = `${timestamp}-${Math.random().toString(36).slice(-5)}`;
+  const artifactsDir = createArtifactsDir(argv.artifacts || path.join('runs', defaultRunId));
+  console.log(`Artifacts directory: ${artifactsDir}`);
+
   const browser = await puppeteer.launch({
-    headless: headless ? 'new' : false,
-    defaultViewport: viewport,
-    args: ['--disable-infobars', `--window-size=${viewport.width},${viewport.height}`]
+    headless: !argv.headful,
+    defaultViewport: null,
+    args: ['--disable-infobars']
   });
 
   const page = await browser.newPage();
-  await page.setViewport(viewport);
-  page.setDefaultTimeout(15000);
+  page.setDefaultTimeout(DEFAULT_TIMEOUT);
 
   console.log(`Opening ${frontdoorUrl}`);
   await page.goto(frontdoorUrl, { waitUntil: 'networkidle2' });
-  await dismissInvalidUrlModalAndFallbackHome(page, instanceUrl);
-  await wait(page, 1000);
+  await waitForLexIdle(page);
 
-  for (const [index, step] of steps.entries()) {
+  let failure = null;
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    const label = `step-${index + 1}`;
     console.log(`Executing step ${index + 1}/${steps.length}: ${step.action}`);
+
     try {
+      if (shotsMode !== 'none') {
+        await snap(page, path.join(artifactsDir, `${label}-pre.png`));
+      }
+
       switch (step.action) {
         case 'click':
-          await performClick(page, step, selectorTimeout, debugMode);
+          await performClick(page, step);
           break;
         case 'type':
-          await performType(page, step, selectorTimeout);
+          await performType(page, step);
           break;
         case 'wait':
           await performWait(page, step);
           break;
         default:
-          console.warn(`Unknown action: ${step.action}`);
+          throw new Error(`Unsupported action: ${step.action}`);
+      }
+
+      if (shotsMode !== 'none') {
+        await snap(page, path.join(artifactsDir, `${label}-post.png`));
       }
     } catch (err) {
-      console.error(`Step ${index + 1} failed:`, err.message);
-      await captureDiagnostics(page, step, index, err, debugMode);
+      const errorShot = path.join(artifactsDir, `${label}-error.png`);
+      await snap(page, errorShot);
+      if (shotsMode === 'verbose') {
+        await saveDom(page, path.join(artifactsDir, `${label}-dom.html`));
+      }
+      const relativeError = path.relative(process.cwd(), errorShot);
+      failure = new Error(`${err.message || err} (see ${relativeError})`);
+      failure.stack = err.stack;
+      console.error(`Step ${index + 1} failed: ${failure.message}`);
       break;
     }
   }
 
+  if (!failure) {
+    console.log('Run complete.');
+  }
+
   await browser.close();
-  console.log('Run complete.');
+
+  if (failure) {
+    throw failure;
+  }
 }
 
-main().catch(err => {
-  console.error('Runner failed:', err.message);
-  process.exit(1);
-});
+run()
+  .then(() => {
+    // success
+  })
+  .catch(err => {
+    console.error('Runner failed:', err.message);
+    process.exit(1);
+  });

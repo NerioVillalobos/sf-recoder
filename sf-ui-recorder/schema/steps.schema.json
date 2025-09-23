@@ -1,260 +1,150 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Recorded Steps",
+  "title": "Salesforce UI Plan",
   "oneOf": [
-    {
-      "$ref": "#/definitions/plan"
-    },
-    {
-      "$ref": "#/definitions/stepArray"
-    }
+    { "$ref": "#/definitions/plan" },
+    { "$ref": "#/definitions/stepsArray" }
   ],
   "definitions": {
     "plan": {
       "type": "object",
-      "additionalProperties": false,
+      "required": ["steps"],
       "properties": {
-        "version": {
-          "type": "number"
-        },
-        "meta": {
-          "type": "object"
-        },
-        "start": {
-          "$ref": "#/definitions/start"
-        },
-        "steps": {
-          "$ref": "#/definitions/stepArray"
-        }
+        "version": { "type": "number" },
+        "meta": { "type": "object", "additionalProperties": true },
+        "start": { "$ref": "#/definitions/start" },
+        "steps": { "$ref": "#/definitions/stepsArray" }
       },
-      "required": [
-        "steps"
-      ]
+      "additionalProperties": false
+    },
+    "stepsArray": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/step" }
     },
     "start": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
-        "retURL": {
-          "type": "string"
-        }
-      }
-    },
-    "stepArray": {
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/step"
-      }
+        "retURL": { "type": "string" }
+      },
+      "additionalProperties": false
     },
     "step": {
       "type": "object",
-      "additionalProperties": false,
+      "required": ["action"],
       "properties": {
         "action": {
           "type": "string",
-          "enum": [
-            "click",
-            "type",
-            "wait"
-          ]
+          "enum": ["click", "type", "wait"]
         },
-        "selector": {
-          "$ref": "#/definitions/selector"
-        },
-        "value": {
-          "type": "string"
-        },
-        "delay": {
-          "type": "number"
-        },
-        "waitFor": {
-          "$ref": "#/definitions/waitFor"
-        },
-        "ms": {
-          "type": "number"
-        },
-        "timestamp": {
-          "type": "number"
-        }
+        "selector": { "$ref": "#/definitions/selector" },
+        "value": { "type": "string" },
+        "delay": { "type": "number", "minimum": 0 },
+        "waitFor": { "$ref": "#/definitions/waitFor" },
+        "ms": { "type": "number", "minimum": 0 },
+        "timestamp": { "type": "number" },
+        "note": { "type": "string" }
       },
-      "required": [
-        "action"
-      ],
       "allOf": [
         {
           "if": {
-            "properties": {
-              "action": {
-                "const": "click"
-              }
-            }
+            "properties": { "action": { "const": "type" } }
           },
           "then": {
-            "required": [
-              "selector"
-            ]
+            "required": ["selector", "value"]
           }
         },
         {
           "if": {
-            "properties": {
-              "action": {
-                "const": "type"
-              }
-            }
+            "properties": { "action": { "const": "click" } }
           },
           "then": {
-            "required": [
-              "selector",
-              "value"
-            ]
+            "required": ["selector"]
           }
         },
         {
           "if": {
-            "properties": {
-              "action": {
-                "const": "wait"
-              }
-            }
+            "properties": { "action": { "const": "wait" } }
           },
           "then": {
-            "required": [
-              "waitFor"
-            ]
+            "properties": { "selector": false },
+            "required": []
           }
         }
-      ]
+      ],
+      "additionalProperties": false
     },
     "waitFor": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "type": {
           "type": "string",
-          "enum": [
-            "networkidle",
-            "short",
-            "dom"
-          ]
+          "enum": ["networkidle", "short", "dom"]
         },
-        "selector": {
-          "$ref": "#/definitions/selector"
-        },
-        "ms": {
-          "type": "number"
-        }
-      }
+        "selector": { "$ref": "#/definitions/selector" }
+      },
+      "additionalProperties": false
     },
     "selector": {
       "oneOf": [
         {
           "type": "object",
-          "additionalProperties": false,
+          "required": ["type", "value"],
           "properties": {
-            "type": {
-              "const": "dataTestId"
-            },
-            "value": {
-              "type": "string"
-            }
+            "type": { "const": "dataTestId" },
+            "value": { "type": "string" }
           },
-          "required": [
-            "type",
-            "value"
-          ]
+          "additionalProperties": false
         },
         {
           "type": "object",
-          "additionalProperties": false,
+          "required": ["type", "value"],
           "properties": {
-            "type": {
-              "const": "css"
-            },
-            "value": {
-              "type": "string"
-            }
+            "type": { "const": "css" },
+            "value": { "type": "string" }
           },
-          "required": [
-            "type",
-            "value"
-          ]
+          "additionalProperties": false
         },
         {
           "type": "object",
-          "additionalProperties": false,
+          "required": ["type", "value"],
           "properties": {
-            "type": {
-              "const": "xpath"
-            },
-            "value": {
-              "type": "string"
-            }
+            "type": { "const": "xpath" },
+            "value": { "type": "string" }
           },
-          "required": [
-            "type",
-            "value"
-          ]
+          "additionalProperties": false
         },
         {
           "type": "object",
-          "additionalProperties": false,
+          "required": ["type", "text"],
           "properties": {
-            "type": {
-              "const": "text"
-            },
-            "text": {
-              "type": "string"
-            },
+            "type": { "const": "text" },
+            "text": { "type": "string" },
             "match": {
               "type": "string",
-              "enum": [
-                "equals",
-                "contains",
-                "regex"
-              ]
+              "enum": ["equals", "contains", "regex"],
+              "default": "equals"
             }
           },
-          "required": [
-            "type",
-            "text"
-          ]
+          "additionalProperties": false
         },
         {
           "type": "object",
-          "additionalProperties": false,
+          "required": ["type", "text"],
           "properties": {
-            "type": {
-              "const": "label"
-            },
-            "text": {
-              "type": "string"
-            }
+            "type": { "const": "label" },
+            "text": { "type": "string" }
           },
-          "required": [
-            "type",
-            "text"
-          ]
+          "additionalProperties": false
         },
         {
           "type": "object",
-          "additionalProperties": false,
+          "required": ["type", "role", "name"],
           "properties": {
-            "type": {
-              "const": "role"
-            },
-            "role": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            }
+            "type": { "const": "role" },
+            "role": { "type": "string" },
+            "name": { "type": "string" }
           },
-          "required": [
-            "type",
-            "role",
-            "name"
-          ]
+          "additionalProperties": false
         }
       ]
     }
