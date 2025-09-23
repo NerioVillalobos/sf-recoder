@@ -397,6 +397,48 @@ async function captureDiagnostics(page, step, index, error, debugMode) {
   console.error('--- End diagnostics ---');
 }
 
+async function dismissInvalidUrlModalAndFallbackHome(page, instanceUrl) {
+  if (!page || !instanceUrl) {
+    return;
+  }
+
+  await wait(page, 400);
+
+  let seen = false;
+  try {
+    seen = await page.evaluate(() => {
+      const modal = document.querySelector('.slds-modal__container, .forceModal, .modal-container');
+      if (!modal) {
+        return false;
+      }
+      const txt = modal.innerText || '';
+      return /page doesn[\u2019']?t exist/i.test(txt);
+    });
+  } catch (err) {
+    return;
+  }
+
+  if (!seen) {
+    return;
+  }
+
+  try {
+    await page.evaluate(() => {
+      const btn = document.querySelector('.slds-modal__close, .slds-modal__header button, button[title="Close"]');
+      if (btn) {
+        btn.click();
+      }
+    });
+    await wait(page, 300);
+  } catch (err) {
+    // Ignore failures while attempting to close the modal.
+  }
+
+  const trimmed = instanceUrl.replace(/\/+$/, '');
+  const homeUrl = `${trimmed}/lightning/page/home`;
+  await page.goto(homeUrl, { waitUntil: 'networkidle2' });
+}
+
 async function main() {
   const argv = minimist(process.argv.slice(2), {
     string: ['org', 'steps', 'ret', 'timeout'],
@@ -440,14 +482,10 @@ async function main() {
     }
   }
 
-  let retURL = argv.ret;
-  if (!retURL && !isArrayRoot && plan && plan.start && typeof plan.start.retURL === 'string') {
-    retURL = plan.start.retURL;
-  }
-  retURL = retURL || DEFAULT_RET_URL;
+  const landingRet = argv.ret ? String(argv.ret) : DEFAULT_RET_URL;
 
   const { instanceUrl, accessToken } = getOrgInfo(orgAlias);
-  const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, retURL);
+  const frontdoorUrl = buildFrontdoorUrl(instanceUrl, accessToken, landingRet);
 
   const viewport = { width: 1600, height: 900 };
   const browser = await puppeteer.launch({
@@ -462,6 +500,7 @@ async function main() {
 
   console.log(`Opening ${frontdoorUrl}`);
   await page.goto(frontdoorUrl, { waitUntil: 'networkidle2' });
+  await dismissInvalidUrlModalAndFallbackHome(page, instanceUrl);
   await wait(page, 1000);
 
   for (const [index, step] of steps.entries()) {

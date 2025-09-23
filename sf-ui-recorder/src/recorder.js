@@ -34,7 +34,6 @@ async function main() {
   let writeChain = Promise.resolve();
   let persistPlan = async () => {};
   let saveStep = () => {};
-  let updateStartRetURL = () => {};
 
   if (!isScan) {
     planRoot = { version: 1, steps: [] };
@@ -98,26 +97,6 @@ async function main() {
         });
     };
 
-    updateStartRetURL = ret => {
-      if (!ret || typeof ret !== 'string') {
-        return;
-      }
-      if (!planRoot.start || typeof planRoot.start !== 'object') {
-        planRoot.start = {};
-      }
-      if (planRoot.start.retURL === ret) {
-        return;
-      }
-      planRoot.start.retURL = ret;
-      writeChain = writeChain
-        .then(async () => {
-          await persistPlan();
-          console.log(`Recorder start.retURL set to ${ret}`);
-        })
-        .catch(err => {
-          console.error('Failed to persist start.retURL:', err.message);
-        });
-    };
   }
 
   const viewport = { width: 1600, height: 900 };
@@ -157,10 +136,6 @@ async function main() {
     }
   });
 
-  await page.exposeFunction('sfRecorderSetStart', ret => {
-    updateStartRetURL(ret);
-  });
-
   page.on('console', msg => {
     try {
       const text = msg.text();
@@ -192,7 +167,6 @@ async function main() {
       const MAX_TEXT_LENGTH = 80;
       const STATUS_SUMMARY_PATTERN = /^\d+\s+statuses selected$/i;
       const FIELD_SERVICE_OPTION = /field service settings/i;
-      const FIELD_SERVICE_RETURL = '/lightning/n/FSL_Field_Service_Settings';
       const APP_LAUNCHER_TEXT = /app launcher/i;
       const APP_LAUNCHER_SEARCH = /search apps and items/i;
       const PRIMARY_ACTIONABLE_QUERY = '[role="menuitem"],[role="option"],[role="button"],button,a,[role="tab"],[role="link"],input,textarea,select';
@@ -796,9 +770,6 @@ async function main() {
 
         if (typeof window.sfRecorderLog === 'function') {
           window.sfRecorderLog('Recorded App Launcher choice: Field Service Settings');
-        }
-        if (typeof window.sfRecorderSetStart === 'function') {
-          window.sfRecorderSetStart(FIELD_SERVICE_RETURL);
         }
         return false;
       }
